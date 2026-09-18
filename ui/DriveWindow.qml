@@ -25,7 +25,7 @@ Item {
 
   function open(payloadJson) {
     root.opened = true
-    service.refresh()
+    backend.refresh()
     if (payloadJson) {
       try {
         var p = JSON.parse(payloadJson)
@@ -33,6 +33,7 @@ Item {
         if (p.remote) root.activeRemote = p.remote
       } catch (e) {}
     }
+    Qt.callLater(function () { keyCatcher.forceActiveFocus() })
   }
 
   function close() {
@@ -44,11 +45,11 @@ Item {
   }
 
   Service {
-    id: service
+    id: backend
     pluginPath: Quickshell.env("HOME") + "/.config/omarchy/plugins/ttt.odrive"
     onDrivesChanged: {
-      if (root.activeRemote === "" && service.drives.length > 0) {
-        root.activeRemote = service.drives[0].name
+      if (root.activeRemote === "" && backend.drives.length > 0) {
+        root.activeRemote = backend.drives[0].name
       }
     }
   }
@@ -67,7 +68,10 @@ Item {
     }
 
     Item {
+      id: keyCatcher
       anchors.fill: parent
+      focus: true
+      Keys.onEscapePressed: root.close()
 
       RowLayout {
         anchors.fill: parent
@@ -103,8 +107,8 @@ Item {
               CloudIcon {
                 iconSize: Style.font.display
                 color: root.accent
-                active: service.mountedDrives > 0
-                busy: service.actionBusy || service.refreshing
+                active: backend.mountedDrives > 0
+                busy: backend.actionBusy || backend.refreshing
               }
 
               Column {
@@ -145,7 +149,7 @@ Item {
                 glyph: "󰅟"
                 label: "Cloud Drives"
                 viewId: "drives"
-                badgeText: service.totalDrives > 0 ? (service.mountedDrives + "/" + service.totalDrives) : ""
+                badgeText: backend.totalDrives > 0 ? (backend.mountedDrives + "/" + backend.totalDrives) : ""
               }
 
               NavButton {
@@ -194,16 +198,16 @@ Item {
 
                 Text {
                   anchors.horizontalCenter: parent.horizontalCenter
-                  text: service.installed ? "Engine Ready" : "rclone missing"
+                  text: backend.installed ? "Engine Ready" : "rclone missing"
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   font.bold: true
-                  color: service.installed ? Color.accent : root.urgent
+                  color: backend.installed ? Color.accent : root.urgent
                 }
 
                 Text {
                   anchors.horizontalCenter: parent.horizontalCenter
-                  text: service.version.replace("rclone ", "") || "v1.75+"
+                  text: backend.version.replace("rclone ", "") || "v1.75+"
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption - Style.space(2)
                   color: root.dim
@@ -261,10 +265,10 @@ Item {
                 }
 
                 Text {
-                  text: service.lastAction !== "" ? service.lastAction : (service.mountedDrives + " of " + service.totalDrives + " drives mounted")
+                  text: backend.lastAction !== "" ? backend.lastAction : (backend.mountedDrives + " of " + backend.totalDrives + " drives mounted")
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  color: service.lastAction !== "" ? Color.accent : root.dim
+                  color: backend.lastAction !== "" ? Color.accent : root.dim
                 }
               }
 
@@ -281,14 +285,14 @@ Item {
               }
 
               Button {
-                iconText: service.allMounted ? "󰅛" : "󰄬"
-                text: service.allMounted ? "Unmount All" : "Mount All"
+                iconText: backend.allMounted ? "󰅛" : "󰄬"
+                text: backend.allMounted ? "Unmount All" : "Mount All"
                 fontFamily: root.fontFamily
                 foreground: root.foreground
                 bordered: true
                 onClicked: {
-                  if (service.allMounted) service.unmountAll()
-                  else service.mountAll()
+                  if (backend.allMounted) backend.unmountAll()
+                  else backend.mountAll()
                 }
               }
 
@@ -298,7 +302,7 @@ Item {
                 fontFamily: root.fontFamily
                 foreground: root.foreground
                 bordered: true
-                onClicked: service.openFolder("")
+                onClicked: backend.openFolder("")
               }
 
               PanelActionButton {
@@ -306,7 +310,7 @@ Item {
                 tooltipText: "Refresh status & quotas"
                 foreground: root.foreground
                 hoverColor: Color.accent
-                onClicked: service.refresh()
+                onClicked: backend.refresh()
               }
             }
           }
@@ -345,8 +349,8 @@ Item {
 
                   MetricCard {
                     title: "Active Mounts"
-                    value: service.mountedDrives + " / " + service.totalDrives
-                    subtitle: service.allMounted ? "All drives attached" : (service.totalDrives - service.mountedDrives) + " unmounted"
+                    value: backend.mountedDrives + " / " + backend.totalDrives
+                    subtitle: backend.allMounted ? "All drives attached" : (backend.totalDrives - backend.mountedDrives) + " unmounted"
                     glyph: "󰅠"
                     glyphColor: Color.accent
                   }
@@ -361,8 +365,8 @@ Item {
 
                   MetricCard {
                     title: "Cache Mode"
-                    value: service.vfsCacheMode.toUpperCase()
-                    subtitle: service.cacheMaxSizeGb + " GB cache quota"
+                    value: backend.vfsCacheMode.toUpperCase()
+                    subtitle: backend.cacheMaxSizeGb + " GB cache quota"
                     glyph: "󰋊"
                     glyphColor: root.dim
                   }
@@ -387,10 +391,10 @@ Item {
                 ColumnLayout {
                   Layout.fillWidth: true
                   spacing: Style.space(10)
-                  visible: service.totalDrives > 0
+                  visible: backend.totalDrives > 0
 
                   Repeater {
-                    model: service.drives
+                    model: backend.drives
 
                     BorderSurface {
                       id: driveCard
@@ -483,7 +487,7 @@ Item {
                             onClicked: {
                               root.activeRemote = modelData.name
                               root.activeView = "files"
-                              service.setBrowserPath(modelData.name, "")
+                              backend.setBrowserPath(modelData.name, "")
                             }
                           }
 
@@ -494,14 +498,14 @@ Item {
                             fontFamily: root.fontFamily
                             foreground: root.foreground
                             bordered: true
-                            onClicked: service.openFolder(modelData.name)
+                            onClicked: backend.openFolder(modelData.name)
                           }
 
                           // Mount / Unmount Switch
                           ToggleSwitch {
                             checked: modelData.mounted
                             foreground: root.foreground
-                            onToggled: service.toggleMount(modelData.name, modelData.mounted)
+                            onToggled: backend.toggleMount(modelData.name, modelData.mounted)
                           }
                         }
 
@@ -552,11 +556,11 @@ Item {
 
                 // Empty state if no drives
                 EmptyState {
-                  visible: service.totalDrives === 0
+                  visible: backend.totalDrives === 0
                   Layout.fillWidth: true
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onAddProvider: function(provId) { service.launchSetup(provId) }
+                  onAddProvider: function(provId) { backend.launchSetup(provId) }
                 }
               }
             }
@@ -587,7 +591,7 @@ Item {
                 Row {
                   spacing: Style.space(6)
                   Repeater {
-                    model: service.drives
+                    model: backend.drives
 
                     Button {
                       text: modelData.name
@@ -598,7 +602,7 @@ Item {
                       bordered: true
                       onClicked: {
                         root.activeRemote = modelData.name
-                        service.setBrowserPath(modelData.name, "")
+                        backend.setBrowserPath(modelData.name, "")
                       }
                     }
                   }
@@ -612,7 +616,7 @@ Item {
                   fontFamily: root.fontFamily
                   foreground: root.foreground
                   bordered: true
-                  onClicked: service.openFolder(root.activeRemote)
+                  onClicked: backend.openFolder(root.activeRemote)
                 }
               }
 
@@ -638,14 +642,14 @@ Item {
                     foreground: root.foreground
                     hoverColor: Color.accent
                     onClicked: {
-                      var parts = service.browserPath.split("/").filter(function(x) { return x.length > 0 })
+                      var parts = backend.browserPath.split("/").filter(function(x) { return x.length > 0 })
                       parts.pop()
-                      service.setBrowserPath(root.activeRemote, parts.join("/"))
+                      backend.setBrowserPath(root.activeRemote, parts.join("/"))
                     }
                   }
 
                   Text {
-                    text: root.activeRemote + ": /" + service.browserPath
+                    text: root.activeRemote + ": /" + backend.browserPath
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
                     color: root.foreground
@@ -658,7 +662,7 @@ Item {
                     tooltipText: "Reload directory"
                     foreground: root.foreground
                     hoverColor: Color.accent
-                    onClicked: service.setBrowserPath(root.activeRemote, service.browserPath)
+                    onClicked: backend.setBrowserPath(root.activeRemote, backend.browserPath)
                   }
                 }
               }
@@ -678,7 +682,7 @@ Item {
                   spacing: Style.space(4)
 
                   Text {
-                    visible: service.browserFiles.length === 0 && !service.browserLoading
+                    visible: backend.browserFiles.length === 0 && !backend.browserLoading
                     text: root.activeRemote === "" ? "Select a drive above to browse files." : "Empty folder or drive not mounted."
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
@@ -688,7 +692,7 @@ Item {
                   }
 
                   Text {
-                    visible: service.browserLoading
+                    visible: backend.browserLoading
                     text: "Loading files…"
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
@@ -698,7 +702,7 @@ Item {
                   }
 
                   Repeater {
-                    model: service.browserFiles
+                    model: backend.browserFiles
 
                     CursorSurface {
                       width: fileListCol.width
@@ -712,9 +716,9 @@ Item {
                         onExited: parent.hasCursor = false
                         onDoubleClicked: {
                           if (modelData.isDir) {
-                            service.setBrowserPath(root.activeRemote, modelData.relPath)
+                            backend.setBrowserPath(root.activeRemote, modelData.relPath)
                           } else if (modelData.path) {
-                            service.openFile(modelData.path)
+                            backend.openFile(modelData.path)
                           }
                         }
                       }
@@ -812,7 +816,7 @@ Item {
                     providerDesc: "Personal Google Drive or Google Workspace"
                     providerGlyph: "󰊭"
                     providerColor: "#4285F4"
-                    onConnectClicked: service.launchSetup("drive")
+                    onConnectClicked: backend.launchSetup("drive")
                   }
 
                   ProviderConnectCard {
@@ -820,7 +824,7 @@ Item {
                     providerDesc: "Personal, Business, SharePoint"
                     providerGlyph: "󰏲"
                     providerColor: "#0078D4"
-                    onConnectClicked: service.launchSetup("onedrive")
+                    onConnectClicked: backend.launchSetup("onedrive")
                   }
 
                   ProviderConnectCard {
@@ -828,7 +832,7 @@ Item {
                     providerDesc: "Dropbox Personal or Team accounts"
                     providerGlyph: ""
                     providerColor: "#0061FF"
-                    onConnectClicked: service.launchSetup("dropbox")
+                    onConnectClicked: backend.launchSetup("dropbox")
                   }
 
                   ProviderConnectCard {
@@ -836,7 +840,7 @@ Item {
                     providerDesc: "Self-hosted personal or company cloud"
                     providerGlyph: "󰒋"
                     providerColor: "#0082C9"
-                    onConnectClicked: service.launchSetup("nextcloud")
+                    onConnectClicked: backend.launchSetup("nextcloud")
                   }
 
                   ProviderConnectCard {
@@ -844,7 +848,7 @@ Item {
                     providerDesc: "Box enterprise & cloud storage"
                     providerGlyph: "󰉉"
                     providerColor: "#0061D5"
-                    onConnectClicked: service.launchSetup("box")
+                    onConnectClicked: backend.launchSetup("box")
                   }
 
                   ProviderConnectCard {
@@ -852,7 +856,7 @@ Item {
                     providerDesc: "Encrypted personal cloud storage"
                     providerGlyph: "󰅟"
                     providerColor: "#14BF96"
-                    onConnectClicked: service.launchSetup("pcloud")
+                    onConnectClicked: backend.launchSetup("pcloud")
                   }
 
                   ProviderConnectCard {
@@ -860,7 +864,7 @@ Item {
                     providerDesc: "End-to-end encrypted storage"
                     providerGlyph: "󰅟"
                     providerColor: "#6D4AFF"
-                    onConnectClicked: service.launchSetup("protondrive")
+                    onConnectClicked: backend.launchSetup("protondrive")
                   }
 
                   ProviderConnectCard {
@@ -868,7 +872,7 @@ Item {
                     providerDesc: "WebDAV server, S3, MinIO, or Cloudflare R2"
                     providerGlyph: "󰋊"
                     providerColor: "#FF9900"
-                    onConnectClicked: service.launchSetup("s3")
+                    onConnectClicked: backend.launchSetup("s3")
                   }
                 }
               }
@@ -897,14 +901,14 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 Repeater {
-                  model: service.drives
+                  model: backend.drives
 
                   Button {
                     text: modelData.name
                     fontFamily: root.fontFamily
                     foreground: root.foreground
                     bordered: true
-                    onClicked: service.loadLog(modelData.name)
+                    onClicked: backend.loadLog(modelData.name)
                   }
                 }
               }
@@ -927,7 +931,7 @@ Item {
                   Text {
                     id: logText
                     width: parent.width
-                    text: service.currentLog || "Select a drive above to view its mount log."
+                    text: backend.currentLog || "Select a drive above to view its mount log."
                     font.family: "monospace"
                     font.pixelSize: Style.font.caption
                     color: root.foreground
@@ -991,7 +995,7 @@ Item {
                         Layout.preferredWidth: Style.space(180)
                       }
                       Text {
-                        text: service.mountRoot
+                        text: backend.mountRoot
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.bodySmall
                         font.bold: true
@@ -1009,7 +1013,7 @@ Item {
                         Layout.preferredWidth: Style.space(180)
                       }
                       Text {
-                        text: service.vfsCacheMode
+                        text: backend.vfsCacheMode
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.bodySmall
                         font.bold: true
@@ -1027,7 +1031,7 @@ Item {
                         Layout.preferredWidth: Style.space(180)
                       }
                       Text {
-                        text: service.cacheMaxSizeGb + " GB"
+                        text: backend.cacheMaxSizeGb + " GB"
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.bodySmall
                         font.bold: true
@@ -1045,9 +1049,9 @@ Item {
                         Layout.preferredWidth: Style.space(180)
                       }
                       ToggleSwitch {
-                        checked: service.autoMountAll
+                        checked: backend.autoMountAll
                         foreground: root.foreground
-                        onToggled: service.updateConfig("auto_mount_all", !service.autoMountAll)
+                        onToggled: backend.updateConfig("auto_mount_all", !backend.autoMountAll)
                       }
                     }
                   }
@@ -1075,7 +1079,7 @@ Item {
     Layout.fillWidth: true
     implicitHeight: Style.space(38)
 
-    BorderSurface {
+    CursorSurface {
       anchors.fill: parent
       radius: Style.cornerRadius
       hasCursor: navMouse.containsMouse
