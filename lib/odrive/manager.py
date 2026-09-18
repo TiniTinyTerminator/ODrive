@@ -10,6 +10,9 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import urllib.error
+import urllib.request
+
 from .config import (
     get_config_dir,
     get_mount_path_for_remote,
@@ -19,6 +22,26 @@ from .config import (
     save_config,
 )
 from .providers import PROVIDERS, detect_provider
+
+
+def resolve_onedrive_drive(token_str: str) -> Tuple[Optional[str], Optional[str]]:
+    """Query Microsoft Graph API with the OAuth access token to resolve drive_id and drive_type."""
+    try:
+        tok_data = json.loads(token_str) if isinstance(token_str, str) else token_str
+        acc_token = tok_data.get("access_token")
+        if not acc_token:
+            return None, None
+        req = urllib.request.Request(
+            "https://graph.microsoft.com/v1.0/me/drive",
+            headers={"Authorization": f"Bearer {acc_token}"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            d_id = data.get("id")
+            d_type = data.get("driveType", "personal")
+            return d_id, d_type
+    except Exception:
+        return None, None
 
 
 class DriveManager:
@@ -47,6 +70,28 @@ class DriveManager:
             return first_line.strip()
         except (subprocess.SubprocessError, OSError):
             return ""
+
+    def _ensure_onedrive_drive(self, remote_name: str) -> None:
+        """If a OneDrive remote is missing drive_id / drive_type in rclone.conf, resolve and persist them."""
+        rclone_conf = Path.home() / ".config" / "rclone" / "rclone.conf"
+        if not rclone_conf.exists():
+            return
+        try:
+            import configparser
+            cfg = configparser.ConfigParser()
+            cfg.read(rclone_conf)
+            if remote_name in cfg and cfg[remote_name].get("type") == "onedrive":
+                if not cfg[remote_name].get("drive_id"):
+                    tok_str = cfg[remote_name].get("token")
+                    if tok_str:
+                        d_id, d_type = resolve_onedrive_drive(tok_str)
+                        if d_id:
+                            cfg[remote_name]["drive_id"] = d_id
+                            cfg[remote_name]["drive_type"] = d_type or "personal"
+                            with open(rclone_conf, "w", encoding="utf-8") as f:
+                                cfg.write(f)
+        except Exception:
+            pass
 
     def list_remotes(self) -> Dict[str, dict]:
         """Fetch all remotes configured in rclone."""
@@ -108,9 +153,17 @@ class DriveManager:
             if info.get("remote") == remote_name:
                 return True, mp
 
-        # Fallback check: os.path.ismount
-        if os.path.exists(expected_path) and os.path.ismount(expected_path):
-            return True, expected_path
+        # Fallback check: os.path.ismount (and ensure it is responding)
+        try:
+            if os.path.exists(expected_path) and os.path.ismount(expected_path):
+                try:
+                    os.listdir(expected_path)
+                    return True, expected_path
+                except OSError:
+                    # Broken / disconnected FUSE mount
+                    return False, expected_path
+        except OSError:
+            return False, expected_path
 
         return False, expected_path
 
@@ -196,8 +249,8 @@ class DriveManager:
             for root, dirs, files in os.walk(mount_path):
                 # Don't follow symlinks
                 dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
-                # Ignore hidden directories like .cache, .tmp
-                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                # Ignore hidden directories like .cache, .tmp, and OneDrive Personal Vault
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() != "personal vault"]
 
                 for name in files:
                     if name.startswith("."):
@@ -237,12 +290,33 @@ class DriveManager:
         if not self.rclone_bin:
             return False, "rclone is not installed"
 
+        # Ensure OneDrive remote has required drive_id / drive_type
+        self._ensure_onedrive_drive(remote_name)
+
         is_mounted, mount_path = self.is_remote_mounted(remote_name)
         if is_mounted:
             return True, f"{remote_name} is already mounted at {mount_path}"
 
         mount_dir = get_mount_path_for_remote(remote_name)
         mount_dir.mkdir(parents=True, exist_ok=True)
+
+        # Clear any stale or broken mount on the directory before mounting
+        try:
+            active = self.get_active_mounts()
+            if str(mount_dir) in active:
+                if self.fusermount_bin:
+                    subprocess.run([self.fusermount_bin, "-u", "-z", str(mount_dir)], capture_output=True, check=False)
+            elif os.path.exists(str(mount_dir)):
+                try:
+                    if os.path.ismount(str(mount_dir)):
+                        if self.fusermount_bin:
+                            subprocess.run([self.fusermount_bin, "-u", "-z", str(mount_dir)], capture_output=True, check=False)
+                except OSError:
+                    # Stale FUSE mount
+                    if self.fusermount_bin:
+                        subprocess.run([self.fusermount_bin, "-u", "-z", str(mount_dir)], capture_output=True, check=False)
+        except Exception:
+            pass
 
         cfg = load_config()
         vfs_mode = cfg.get("vfs_cache_mode", "full")
@@ -262,17 +336,43 @@ class DriveManager:
             "--daemon",
             "--daemon-timeout=20s",
             f"--log-file={log_file}",
+            "--log-level=INFO",
         ]
 
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=25, check=False)
+            # Note: Do NOT use capture_output=True. rclone --daemon forks a background daemon
+            # which inherits stdout/stderr pipes. capture_output=True causes Python to wait for
+            # EOF on the pipes until timeout expires and kills the daemon.
+            subprocess.run(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
             # Give it a moment to attach
-            time.sleep(0.5)
+            time.sleep(1.0)
             mounted, actual_path = self.is_remote_mounted(remote_name)
             if mounted:
                 return True, f"Mounted {remote_name} at {actual_path}"
-            err = (res.stderr or res.stdout or "Mount verification timed out").strip()
-            return False, f"Failed to mount {remote_name}: {err}"
+
+            # If not mounted, read error from the log file
+            err_msg = ""
+            if log_file.exists():
+                try:
+                    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                        lines = [l.strip() for l in f if l.strip()]
+                        for line in reversed(lines[-15:]):
+                            if "ERROR" in line or "CRITICAL" in line or "failed" in line:
+                                err_msg = line
+                                break
+                        if not err_msg and lines:
+                            err_msg = lines[-1]
+                except Exception:
+                    pass
+
+            return False, f"Failed to mount {remote_name}: {err_msg or 'Mount verification failed'}"
         except subprocess.TimeoutExpired:
             return False, f"Mount command timed out for {remote_name}"
         except OSError as e:
@@ -281,7 +381,16 @@ class DriveManager:
     def unmount(self, remote_name: str) -> Tuple[bool, str]:
         """Unmount a remote cleanly using fusermount."""
         is_mounted, mount_path = self.is_remote_mounted(remote_name)
-        if not is_mounted:
+        active_mounts = self.get_active_mounts()
+        needs_unmount = is_mounted or (mount_path in active_mounts)
+        if not needs_unmount:
+            try:
+                if os.path.ismount(mount_path):
+                    needs_unmount = True
+            except OSError:
+                needs_unmount = True
+
+        if not needs_unmount:
             return True, f"{remote_name} is not mounted"
 
         # Try fusermount3 / fusermount first
@@ -369,6 +478,8 @@ class DriveManager:
         """Verify that remote is reachable and credentials are valid."""
         if not self.rclone_bin:
             return False, "rclone is not installed"
+
+        self._ensure_onedrive_drive(remote_name)
 
         try:
             res = subprocess.run(
@@ -504,6 +615,12 @@ class DriveManager:
                 create_cmd.extend(["client_id", client_id])
             if client_secret:
                 create_cmd.extend(["client_secret", client_secret])
+
+            # OneDrive requires drive_id and drive_type to function
+            if rclone_type == "onedrive":
+                drive_id, drive_type = resolve_onedrive_drive(token_str)
+                if drive_id:
+                    create_cmd.extend(["drive_id", drive_id, "drive_type", drive_type or "personal"])
 
             create_res = subprocess.run(
                 create_cmd,
