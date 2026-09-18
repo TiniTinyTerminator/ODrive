@@ -67,3 +67,114 @@ function providerIcon(providerId) {
       return "󰅟"
   }
 }
+
+var ALL_PROVIDERS = [
+  {
+    id: "drive",
+    name: "Google Drive",
+    category: "Cloud Storage",
+    glyph: "󰊭",
+    color: "#4285F4",
+    authType: "oauth",
+    description: "Google Drive (Personal, Workspace, Shared Drives)",
+    defaultName: "GoogleDrive",
+    authTag: "Browser OAuth 2.0"
+  },
+  {
+    id: "onedrive",
+    name: "Microsoft OneDrive",
+    category: "Cloud Storage",
+    glyph: "󰏲",
+    color: "#0078D4",
+    authType: "oauth",
+    description: "Personal, Business, SharePoint accounts",
+    defaultName: "OneDrive",
+    authTag: "Browser OAuth 2.0"
+  },
+  {
+    id: "dropbox",
+    name: "Dropbox",
+    category: "Cloud Storage",
+    glyph: "",
+    color: "#0061FF",
+    authType: "oauth",
+    description: "Dropbox Personal or Business storage",
+    defaultName: "Dropbox",
+    authTag: "Browser OAuth 2.0"
+  },
+  {
+    id: "nextcloud",
+    name: "Nextcloud / ownCloud",
+    category: "Self-Hosted",
+    glyph: "󰒋",
+    color: "#0082C9",
+    authType: "credentials",
+    description: "Self-hosted cloud storage via WebDAV",
+    defaultName: "Nextcloud",
+    authTag: "Server & Password"
+  },
+  {
+    id: "s3",
+    name: "Amazon S3 / MinIO",
+    category: "Object Storage",
+    glyph: "󰋊",
+    color: "#FF9900",
+    authType: "s3",
+    description: "AWS S3, MinIO, Cloudflare R2, Wasabi, B2",
+    defaultName: "CloudStorage",
+    authTag: "Access Key & Secret"
+  },
+  {
+    id: "box",
+    name: "Box",
+    category: "Enterprise Cloud",
+    glyph: "󰉉",
+    color: "#0061D5",
+    authType: "oauth",
+    description: "Box Enterprise and Personal cloud storage",
+    defaultName: "Box",
+    authTag: "Browser OAuth 2.0"
+  },
+  {
+    id: "pcloud",
+    name: "pCloud",
+    category: "Encrypted Cloud",
+    glyph: "󰅟",
+    color: "#14BF96",
+    authType: "oauth",
+    description: "Secure European cloud storage",
+    defaultName: "pCloud",
+    authTag: "Browser OAuth 2.0"
+  },
+  {
+    id: "protondrive",
+    name: "Proton Drive",
+    category: "Encrypted Cloud",
+    glyph: "󰅟",
+    color: "#6D4AFF",
+    authType: "protondrive",
+    description: "End-to-end encrypted Swiss cloud storage",
+    defaultName: "ProtonDrive",
+    authTag: "Proton Login"
+  },
+  {
+    id: "webdav",
+    name: "Generic WebDAV",
+    category: "Standard Protocol",
+    glyph: "󰒋",
+    color: "#7E57C2",
+    authType: "webdav",
+    description: "Fastmail, Mailbox.org, custom WebDAV servers",
+    defaultName: "WebDAV",
+    authTag: "URL & Login"
+  }
+]
+
+function getProvider(providerId) {
+  var id = String(providerId || "").toLowerCase()
+  for (var i = 0; i < ALL_PROVIDERS.length; i++) {
+    if (ALL_PROVIDERS[i].id === id) return ALL_PROVIDERS[i]
+  }
+  return ALL_PROVIDERS[0]
+}
+

@@ -276,6 +276,26 @@ def main():
     p_cfg.add_argument("key", nargs="?", default="", help="Config key")
     p_cfg.add_argument("value", nargs="?", default="", help="New value")
 
+    # add-oauth
+    p_oauth = subparsers.add_parser("add-oauth", help="Authenticate and create an OAuth remote")
+    p_oauth.add_argument("remote", help="Remote name")
+    p_oauth.add_argument("provider", help="Provider ID (drive, onedrive, dropbox, box, pcloud)")
+    p_oauth.add_argument("--client-id", default="", help="Custom OAuth Client ID")
+    p_oauth.add_argument("--client-secret", default="", help="Custom OAuth Client Secret")
+    p_oauth.add_argument("--mount", action="store_true", help="Mount immediately after configuration")
+
+    # add-credentials
+    p_cred = subparsers.add_parser("add-credentials", help="Create a credentials-based remote (Nextcloud, WebDAV, S3, etc.)")
+    p_cred.add_argument("remote", help="Remote name")
+    p_cred.add_argument("provider", help="Provider ID (nextcloud, webdav, s3, protondrive)")
+    p_cred.add_argument("--options", default="{}", help="JSON string with options (url, user, pass, etc.)")
+    p_cred.add_argument("--no-test", action="store_true", help="Skip connection testing")
+    p_cred.add_argument("--mount", action="store_true", help="Mount immediately after configuration")
+
+    # test-remote
+    p_test = subparsers.add_parser("test-remote", help="Test connection to a remote")
+    p_test.add_argument("remote", help="Remote name")
+
     # gui / summon
     subparsers.add_parser("gui", help="Open the ODrive desktop app")
     subparsers.add_parser("app", help="Open the ODrive desktop app")
@@ -374,6 +394,74 @@ def main():
                 print(f"{args.key} = {cfg.get(args.key)}")
         else:
             print(json.dumps(cfg, indent=2))
+
+    elif args.command == "add-oauth":
+        ok, res = manager.add_remote_oauth(
+            args.remote,
+            args.provider,
+            client_id=args.client_id,
+            client_secret=args.client_secret,
+        )
+        if ok:
+            remote_name = res
+            mounted = False
+            mount_err = ""
+            if args.mount:
+                m_ok, m_msg = manager.mount(remote_name)
+                mounted = m_ok
+                if not m_ok:
+                    mount_err = m_msg
+            print(json.dumps({
+                "ok": True,
+                "remote": remote_name,
+                "mounted": mounted,
+                "mountError": mount_err,
+                "message": f"Successfully connected {remote_name}",
+            }))
+        else:
+            print(json.dumps({
+                "ok": False,
+                "error": res,
+            }))
+            sys.exit(1)
+
+    elif args.command == "add-credentials":
+        try:
+            options = json.loads(args.options) if args.options else {}
+        except json.JSONDecodeError:
+            options = {}
+        ok, res = manager.add_remote_credentials(
+            args.remote,
+            args.provider,
+            options=options,
+            test_connection=not args.no_test,
+        )
+        if ok:
+            remote_name = res
+            mounted = False
+            mount_err = ""
+            if args.mount:
+                m_ok, m_msg = manager.mount(remote_name)
+                mounted = m_ok
+                if not m_ok:
+                    mount_err = m_msg
+            print(json.dumps({
+                "ok": True,
+                "remote": remote_name,
+                "mounted": mounted,
+                "mountError": mount_err,
+                "message": f"Successfully connected {remote_name}",
+            }))
+        else:
+            print(json.dumps({
+                "ok": False,
+                "error": res,
+            }))
+            sys.exit(1)
+
+    elif args.command == "test-remote":
+        ok, msg = manager.test_remote(args.remote)
+        print(json.dumps({"ok": ok, "message": msg}))
 
     elif args.command in ("gui", "summon", "app"):
         summon_gui()

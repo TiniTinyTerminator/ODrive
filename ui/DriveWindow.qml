@@ -31,6 +31,7 @@ Item {
         var p = JSON.parse(payloadJson)
         if (p.view) root.activeView = p.view
         if (p.remote) root.activeRemote = p.remote
+        if (p.provider) addForm.selectProvider(p.provider)
       } catch (e) {}
     }
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
@@ -421,12 +422,7 @@ Item {
                             implicitWidth: Style.space(42)
                             implicitHeight: Style.space(42)
                             radius: Style.cornerRadius
-                            color: modelData.color ? Qt.rgba(
-                              Color.channel(modelData.color, 0),
-                              Color.channel(modelData.color, 1),
-                              Color.channel(modelData.color, 2),
-                              0.15
-                            ) : Qt.rgba(1, 1, 1, 0.08)
+                            color: modelData.color ? Qt.alpha(modelData.color, 0.15) : Qt.rgba(1, 1, 1, 0.08)
 
                             Text {
                               anchors.centerIn: parent
@@ -560,7 +556,10 @@ Item {
                   Layout.fillWidth: true
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onAddProvider: function(provId) { backend.launchSetup(provId) }
+                  onAddProvider: function(provId) {
+                    root.activeView = "add"
+                    addForm.selectProvider(provId)
+                  }
                 }
               }
             }
@@ -770,111 +769,23 @@ Item {
             }
 
             // ----------------------------------------------------------------
-            // 3. ADD ACCOUNT VIEW
+            // 3. ADD ACCOUNT VIEW (Native In-App GUI Setup)
             // ----------------------------------------------------------------
-            Flickable {
+            AddAccountForm {
+              id: addForm
               visible: root.activeView === "add"
               anchors.fill: parent
-              contentWidth: width
-              contentHeight: addContent.implicitHeight + Style.space(40)
-              clip: true
-              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-              ColumnLayout {
-                id: addContent
-                anchors {
-                  left: parent.left
-                  right: parent.right
-                  top: parent.top
-                  margins: Style.space(20)
-                }
-                spacing: Style.space(16)
-
-                Text {
-                  text: "Choose a Cloud Provider to Connect"
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.heading
-                  font.bold: true
-                  color: root.foreground
-                }
-
-                Text {
-                  text: "Select a service below to open the guided terminal setup. You will be prompted to log in via your web browser to securely authenticate."
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  color: root.dim
-                  wrapMode: Text.WordWrap
-                  Layout.fillWidth: true
-                }
-
-                Flow {
-                  Layout.fillWidth: true
-                  spacing: Style.space(12)
-
-                  ProviderConnectCard {
-                    providerName: "Google Drive"
-                    providerDesc: "Personal Google Drive or Google Workspace"
-                    providerGlyph: "󰊭"
-                    providerColor: "#4285F4"
-                    onConnectClicked: backend.launchSetup("drive")
-                  }
-
-                  ProviderConnectCard {
-                    providerName: "Microsoft OneDrive"
-                    providerDesc: "Personal, Business, SharePoint"
-                    providerGlyph: "󰏲"
-                    providerColor: "#0078D4"
-                    onConnectClicked: backend.launchSetup("onedrive")
-                  }
-
-                  ProviderConnectCard {
-                    providerName: "Dropbox"
-                    providerDesc: "Dropbox Personal or Team accounts"
-                    providerGlyph: ""
-                    providerColor: "#0061FF"
-                    onConnectClicked: backend.launchSetup("dropbox")
-                  }
-
-                  ProviderConnectCard {
-                    providerName: "Nextcloud / ownCloud"
-                    providerDesc: "Self-hosted personal or company cloud"
-                    providerGlyph: "󰒋"
-                    providerColor: "#0082C9"
-                    onConnectClicked: backend.launchSetup("nextcloud")
-                  }
-
-                  ProviderConnectCard {
-                    providerName: "Box"
-                    providerDesc: "Box enterprise & cloud storage"
-                    providerGlyph: "󰉉"
-                    providerColor: "#0061D5"
-                    onConnectClicked: backend.launchSetup("box")
-                  }
-
-                  ProviderConnectCard {
-                    providerName: "pCloud"
-                    providerDesc: "Encrypted personal cloud storage"
-                    providerGlyph: "󰅟"
-                    providerColor: "#14BF96"
-                    onConnectClicked: backend.launchSetup("pcloud")
-                  }
-
-                  ProviderConnectCard {
-                    providerName: "Proton Drive"
-                    providerDesc: "End-to-end encrypted storage"
-                    providerGlyph: "󰅟"
-                    providerColor: "#6D4AFF"
-                    onConnectClicked: backend.launchSetup("protondrive")
-                  }
-
-                  ProviderConnectCard {
-                    providerName: "Generic WebDAV / S3"
-                    providerDesc: "WebDAV server, S3, MinIO, or Cloudflare R2"
-                    providerGlyph: "󰋊"
-                    providerColor: "#FF9900"
-                    onConnectClicked: backend.launchSetup("s3")
-                  }
-                }
+              backend: backend
+              foreground: root.foreground
+              background: root.background
+              accent: root.accent
+              urgent: root.urgent
+              dim: root.dim
+              fontFamily: root.fontFamily
+              onAccountAdded: function(newRemoteName) {
+                root.activeRemote = newRemoteName
+                root.activeView = "drives"
+                backend.refresh()
               }
             }
 

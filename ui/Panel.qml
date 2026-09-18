@@ -168,7 +168,7 @@ Panel {
           if (service.allMounted) service.unmountAll()
           else service.mountAll()
         }
-        else if (t === "a" || t === "A") service.launchSetup("")
+        else if (t === "a" || t === "A") root.openAppWindow({ view: "add" })
         else if (t === "o" || t === "O") service.openFolder("")
         else if (t === "w" || t === "W") root.openAppWindow({})
       }
@@ -315,7 +315,7 @@ Panel {
             width: parent.width
             foreground: root.foreground
             fontFamily: root.fontFamily
-            onAddProvider: function(provId) { service.launchSetup(provId) }
+            onAddProvider: function(provId) { root.openAppWindow({ view: "add", provider: provId || "" }) }
           }
 
           // Recent Files

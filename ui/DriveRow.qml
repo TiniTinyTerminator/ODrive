@@ -53,12 +53,7 @@ CursorSurface {
         Rectangle {
           anchors.fill: parent
           radius: Style.cornerRadius
-          color: root.drive && root.drive.color ? Qt.rgba(
-            Color.channel(root.drive.color, 0),
-            Color.channel(root.drive.color, 1),
-            Color.channel(root.drive.color, 2),
-            0.15
-          ) : Qt.rgba(1, 1, 1, 0.08)
+          color: (root.drive && root.drive.color) ? Qt.alpha(root.drive.color, 0.15) : Qt.rgba(1, 1, 1, 0.08)
         }
 
         Text {

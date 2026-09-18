@@ -18,7 +18,7 @@ from .config import (
     load_config,
     save_config,
 )
-from .providers import detect_provider
+from .providers import PROVIDERS, detect_provider
 
 
 class DriveManager:
@@ -364,6 +364,246 @@ class DriveManager:
             return False, res.stderr.strip() or "Failed to delete remote"
         except OSError as e:
             return False, str(e)
+
+    def test_remote(self, remote_name: str, timeout_sec: int = 10) -> Tuple[bool, str]:
+        """Verify that remote is reachable and credentials are valid."""
+        if not self.rclone_bin:
+            return False, "rclone is not installed"
+
+        try:
+            res = subprocess.run(
+                [self.rclone_bin, "lsf", f"{remote_name}:", "--max-depth", "1"],
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+            if res.returncode == 0:
+                return True, "Connection verified successfully"
+            err = (res.stderr or res.stdout or "Connection test failed").strip()
+            lines = [
+                re.sub(r"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} (ERROR|CRITICAL|NOTICE): ", "", l)
+                for l in err.splitlines()
+            ]
+            clean_err = "\n".join(l for l in lines if l.strip())
+            return False, clean_err or "Authentication or connection failed"
+        except subprocess.TimeoutExpired:
+            return False, "Connection test timed out. Verify server address and network."
+        except OSError as e:
+            return False, str(e)
+
+    def add_remote_oauth(
+        self,
+        remote_name: str,
+        provider_id: str,
+        client_id: str = "",
+        client_secret: str = "",
+        timeout_sec: int = 180,
+    ) -> Tuple[bool, str]:
+        """Run non-interactive browser OAuth flow for a cloud provider."""
+        if not self.rclone_bin:
+            return False, "rclone is not installed on this system"
+
+        provider = PROVIDERS.get(provider_id, {})
+        rclone_type = provider.get("rclone_type", provider_id)
+
+        # Sanitize remote name
+        clean_name = "".join(c for c in remote_name if c.isalnum() or c in ("-", "_")).strip()
+        if not clean_name:
+            clean_name = provider.get("name", "Cloud").replace(" ", "")
+
+        existing = self.list_remotes()
+        if clean_name in existing:
+            return False, f"A remote named '{clean_name}' already exists. Please choose a different name."
+
+        cmd = [self.rclone_bin, "authorize", rclone_type]
+        if client_id and client_secret:
+            cmd.extend([client_id, client_secret])
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout_sec)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                return False, "Authorization timed out. Please try again."
+
+            if proc.returncode != 0:
+                err = stderr.strip() or stdout.strip() or "Authorization process failed"
+                return False, f"OAuth authorization failed: {err}"
+
+            # Extract JSON token from stdout
+            token_match = re.search(r"\{[\s\S]*\"access_token\"[\s\S]*\}", stdout)
+            if not token_match:
+                token_match = re.search(r"\{[\s\S]*\"[a-zA-Z0-9_-]+\":\s*\"[\s\S]+\"[\s\S]*\}", stdout)
+
+            if not token_match:
+                return False, f"Did not receive a valid authentication token from browser authorization"
+
+            token_str = token_match.group(0).strip()
+
+            # Create remote via rclone config create
+            create_cmd = [
+                self.rclone_bin,
+                "config",
+                "create",
+                clean_name,
+                rclone_type,
+                "token",
+                token_str,
+                "config_is_local",
+                "false",
+            ]
+            if client_id:
+                create_cmd.extend(["client_id", client_id])
+            if client_secret:
+                create_cmd.extend(["client_secret", client_secret])
+
+            create_res = subprocess.run(
+                create_cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if create_res.returncode != 0:
+                err = create_res.stderr.strip() or create_res.stdout.strip()
+                return False, f"Failed to save remote configuration: {err}"
+
+            # Trigger omarchy shell plugin rescan
+            try:
+                subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], capture_output=True, timeout=2)
+            except (subprocess.SubprocessError, OSError):
+                pass
+
+            return True, clean_name
+        except OSError as e:
+            return False, f"Error running authorization: {e}"
+
+    def add_remote_credentials(
+        self,
+        remote_name: str,
+        provider_id: str,
+        options: dict,
+        test_connection: bool = True,
+    ) -> Tuple[bool, str]:
+        """Configure credentials-based remote (Nextcloud, WebDAV, S3, Proton Drive) without terminal."""
+        if not self.rclone_bin:
+            return False, "rclone is not installed on this system"
+
+        provider = PROVIDERS.get(provider_id, {})
+        rclone_type = provider.get("rclone_type", provider_id)
+
+        # Sanitize remote name
+        clean_name = "".join(c for c in remote_name if c.isalnum() or c in ("-", "_")).strip()
+        if not clean_name:
+            clean_name = provider.get("name", "Cloud").replace(" ", "")
+
+        existing = self.list_remotes()
+        if clean_name in existing:
+            return False, f"A remote named '{clean_name}' already exists. Please choose a different name."
+
+        create_args = [self.rclone_bin, "config", "create", clean_name, rclone_type]
+
+        if provider_id == "nextcloud" or (rclone_type == "webdav" and options.get("vendor") == "nextcloud"):
+            url = options.get("url", "").strip()
+            user = options.get("user", "").strip()
+            password = options.get("pass", "").strip()
+
+            if not url:
+                return False, "Server URL is required"
+            if not user:
+                return False, "Username is required"
+            if not password:
+                return False, "Password or App Token is required"
+
+            if not url.startswith("http://") and not url.startswith("https://"):
+                url = "https://" + url
+
+            if not ("/remote.php/dav/files/" in url or url.endswith("/remote.php/webdav")):
+                url = url.rstrip("/") + f"/remote.php/dav/files/{user}"
+
+            create_args.extend([
+                "url", url,
+                "vendor", "nextcloud",
+                "user", user,
+                "pass", password,
+            ])
+
+        elif rclone_type == "webdav":
+            url = options.get("url", "").strip()
+            if not url:
+                return False, "Server URL is required"
+            if not url.startswith("http://") and not url.startswith("https://"):
+                url = "https://" + url
+
+            create_args.extend(["url", url])
+            if options.get("vendor"):
+                create_args.extend(["vendor", options["vendor"]])
+            if options.get("user"):
+                create_args.extend(["user", options["user"]])
+            if options.get("pass"):
+                create_args.extend(["pass", options["pass"]])
+
+        elif rclone_type == "s3":
+            prov = options.get("provider", "Other")
+            create_args.extend(["provider", prov])
+            if options.get("endpoint"):
+                create_args.extend(["endpoint", options["endpoint"].strip()])
+            if options.get("access_key_id"):
+                create_args.extend(["access_key_id", options["access_key_id"].strip()])
+            if options.get("secret_access_key"):
+                create_args.extend(["secret_access_key", options["secret_access_key"].strip()])
+            if options.get("region"):
+                create_args.extend(["region", options["region"].strip()])
+
+        elif rclone_type == "protondrive":
+            username = options.get("username", "").strip()
+            password = options.get("password", "").strip()
+            if not username or not password:
+                return False, "Username and password are required"
+            create_args.extend(["username", username, "password", password])
+            if options.get("2fa"):
+                create_args.extend(["2fa", options["2fa"].strip()])
+
+        else:
+            for k, v in options.items():
+                if v is not None and str(v) != "":
+                    create_args.extend([k, str(v)])
+
+        try:
+            res = subprocess.run(
+                create_args,
+                capture_output=True,
+                text=True,
+                timeout=12,
+                check=False,
+            )
+            if res.returncode != 0:
+                err = res.stderr.strip() or res.stdout.strip()
+                return False, f"Failed to configure remote: {err}"
+
+            if test_connection:
+                ok, test_err = self.test_remote(clean_name, timeout_sec=10)
+                if not ok:
+                    # Clean up failed remote
+                    self.remove_remote(clean_name)
+                    return False, f"Connection failed: {test_err}"
+
+            try:
+                subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], capture_output=True, timeout=2)
+            except (subprocess.SubprocessError, OSError):
+                pass
+
+            return True, clean_name
+        except OSError as e:
+            return False, f"Failed to execute configuration command: {e}"
+
 
     def get_status(self, include_recent: bool = True) -> dict:
         """Produce full status report for QML or CLI display."""

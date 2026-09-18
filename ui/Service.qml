@@ -119,13 +119,68 @@ Item {
     Quickshell.execDetached(args)
   }
 
+  property bool authBusy: false
+  property bool authWaiting: false
+  property string authError: ""
+  property bool authSuccess: false
+  property string authSuccessMessage: ""
+  signal accountCreated(string remoteName)
+
   function launchSetup(providerId) {
-    var args = ["xdg-terminal-exec", "--app-id=TUI.float", "-e", odriveCli, "setup"]
-    if (providerId && providerId !== "") {
-      args.push("")
-      args.push(providerId)
+    // Never launch terminal! Directly summon ODrive GUI window on the "add" view!
+    Quickshell.execDetached([
+      "omarchy-shell", "shell", "summon", "ttt.odrive",
+      JSON.stringify({ view: "add", provider: providerId || "" })
+    ])
+  }
+
+  function addOAuth(remoteName, providerId, clientId, clientSecret, mountAfter) {
+    if (authBusy) return
+    authBusy = true
+    authWaiting = true
+    authError = ""
+    authSuccess = false
+    authSuccessMessage = ""
+
+    var args = [odriveCli, "add-oauth", remoteName, providerId]
+    if (clientId && clientId !== "") {
+      args.push("--client-id")
+      args.push(clientId)
     }
-    Quickshell.execDetached(args)
+    if (clientSecret && clientSecret !== "") {
+      args.push("--client-secret")
+      args.push(clientSecret)
+    }
+    if (mountAfter) {
+      args.push("--mount")
+    }
+    authProc.command = args
+    authProc.running = true
+  }
+
+  function cancelAuth() {
+    if (authProc.running) {
+      authProc.running = false
+    }
+    authBusy = false
+    authWaiting = false
+    authError = "Authorization cancelled."
+  }
+
+  function addCredentials(remoteName, providerId, optionsDict, mountAfter) {
+    if (authBusy) return
+    authBusy = true
+    authWaiting = false
+    authError = ""
+    authSuccess = false
+    authSuccessMessage = ""
+
+    var args = [odriveCli, "add-credentials", remoteName, providerId, "--options", JSON.stringify(optionsDict)]
+    if (mountAfter) {
+      args.push("--mount")
+    }
+    authProc.command = args
+    authProc.running = true
   }
 
   function openFile(filePath) {
@@ -246,6 +301,50 @@ Item {
       root.lastAction = ""
       pollTimer.restart()
       root.refresh()
+    }
+  }
+
+  Process {
+    id: authProc
+    command: []
+    running: false
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var raw = this.text.trim()
+        if (!raw) return
+        try {
+          var res = JSON.parse(raw)
+          if (res.ok) {
+            root.authSuccess = true
+            root.authSuccessMessage = res.message || ("Successfully connected " + res.remote)
+            root.authError = ""
+            root.accountCreated(res.remote)
+            root.refresh()
+          } else {
+            root.authError = res.error || "Failed to configure remote"
+          }
+        } catch (e) {
+          if (raw.indexOf("✓") !== -1 || raw.indexOf("Successfully") !== -1) {
+            root.authSuccess = true
+            root.authSuccessMessage = raw
+            root.refresh()
+          } else {
+            root.authError = raw || "Setup failed"
+          }
+        }
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var err = this.text.trim()
+        if (err && !root.authSuccess && root.authError === "") {
+          root.authError = err
+        }
+      }
+    }
+    onExited: {
+      root.authBusy = false
+      root.authWaiting = false
     }
   }
 
