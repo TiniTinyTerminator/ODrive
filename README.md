@@ -11,24 +11,23 @@ ODrive is a native Omarchy desktop plugin and CLI tool that brings all your clou
 ## ✨ Features
 
 - **Multi-Cloud Integration**: Native support for **Google Drive**, **Microsoft OneDrive**, **Dropbox**, **Nextcloud / ownCloud**, **Box**, **pCloud**, **Proton Drive**, **WebDAV**, **Amazon S3 / MinIO / R2**, and any custom rclone remote.
+- **Full Desktop Application (`FloatingWindow`)**:
+  - Wayland floating application window tiled or managed seamlessly by Hyprland.
+  - **Drives View**: High-level storage metrics, drive health, quota gauges, and one-click mount switches.
+  - **Built-in Cloud File Browser**: Browse and navigate cloud folders directly inside the app with breadcrumb path navigation.
+  - **Account Connection Wizard**: Visual provider cards for Google Drive, OneDrive, Dropbox, Nextcloud, Box, pCloud, Proton Drive, S3, and WebDAV.
+  - **Activity & Diagnostics**: Real-time mount process tracker and live log viewer.
+  - **Preferences & Settings**: Configurable mount point root (`~/Cloud`), VFS cache modes (`full`, `writes`), cache quotas, and login auto-mounts.
 - **Omarchy Bar Widget**:
-  - Cloud status icon with active drive count badge (e.g. `2/3`).
+  - Lightweight cloud status glyph in the Omarchy bar with mounted count badge.
   - Color-coded activity indicators (idle, active mount, syncing, error).
   - Rich tooltip with mount status and drive names.
-  - Left-click to open panel, right-click to quick toggle Mount/Unmount All, middle-click to refresh.
-- **Keyboard-Navigable Panel**:
-  - Full keyboard navigation matching Omarchy design patterns.
-  - Master "Mount All / Unmount All" switch.
-  - Real-time storage quota progress bars (used, total, and percentage).
-  - One-click "Open in File Manager" per drive.
-  - "+ Add Drive" wizard with guided provider setup.
-- **Recent Cloud Files**:
-  - Live peek at recently modified files across all mounted cloud drives.
-  - Click any file to open it directly in its default desktop application.
+  - Left-click to open the quick popout panel with an instant "Open App" button.
+  - Right-click to quick toggle Mount/Unmount All, middle-click to refresh.
 - **Robust CLI & Automation**:
-  - Full-featured `odrive` command line utility for scripting and terminal workflows.
+  - Full-featured `odrive` command line utility (`odrive status`, `odrive files`, `odrive mount`, `odrive app`).
   - Systemd user service for auto-mounting drives on login.
-  - IPC support via `omarchy-shell shell summon ttt.odrive`.
+  - Seamless IPC summoning via `omarchy-shell shell summon ttt.odrive`.
 
 ---
 
