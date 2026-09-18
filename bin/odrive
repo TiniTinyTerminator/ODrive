@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""ODrive CLI launcher."""
+
+import os
+import sys
+
+_here = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(_here), "lib"))
+
+from odrive.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    main()

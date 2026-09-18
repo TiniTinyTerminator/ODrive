@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "ttt.odrive",
+  "name": "ODrive",
+  "version": "1.0.0",
+  "author": "TiniTinyTerminator",
+  "license": "MIT",
+  "description": "Unified cloud drive manager for Omarchy — mount, monitor, and manage Google Drive, OneDrive, Dropbox, Nextcloud, and more.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "ui/Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Cloud Drives",
+    "description": "Mount, monitor storage quotas, and manage cloud drives.",
+    "category": "Files",
+    "aliases": [
+      "odrive",
+      "cloud",
+      "gdrive",
+      "onedrive",
+      "dropbox",
+      "drive"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30,
+      "autoMountAll": true,
+      "mountRoot": "~/Cloud"
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Status refresh interval (seconds)",
+        "min": 10,
+        "max": 600,
+        "step": 10,
+        "defaultValue": 30
+      },
+      {
+        "key": "autoMountAll",
+        "type": "boolean",
+        "label": "Auto-mount configured drives on login",
+        "defaultValue": true
+      },
+      {
+        "key": "mountRoot",
+        "type": "string",
+        "label": "Default mount root directory",
+        "defaultValue": "~/Cloud"
+      }
+    ]
+  }
+}

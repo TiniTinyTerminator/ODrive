@@ -1,0 +1,12 @@
+[Unit]
+Description=ODrive Cloud Drives Auto-Mounter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/odrive auto-mount
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
