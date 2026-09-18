@@ -49,7 +49,7 @@ function providerIcon(providerId) {
     case "drive":
       return "󰊭"
     case "onedrive":
-      return "󰏲"
+      return "󰏊"
     case "dropbox":
       return ""
     case "nextcloud":
@@ -84,7 +84,7 @@ var ALL_PROVIDERS = [
     id: "onedrive",
     name: "Microsoft OneDrive",
     category: "Cloud Storage",
-    glyph: "󰏲",
+    glyph: "󰏊",
     color: "#0078D4",
     authType: "oauth",
     description: "Personal, Business, SharePoint accounts",

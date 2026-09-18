@@ -17,7 +17,7 @@ PROVIDERS = {
         "id": "onedrive",
         "name": "Microsoft OneDrive",
         "rclone_type": "onedrive",
-        "glyph": "󰏲",
+        "glyph": "󰏊",
         "color": "#0078D4",
         "category": "Cloud",
         "description": "OneDrive Personal, Business, SharePoint",

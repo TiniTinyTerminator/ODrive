@@ -75,7 +75,7 @@ Item {
       }
 
       Button {
-        iconText: "󰏲"
+        iconText: "󰏊"
         text: "OneDrive"
         fontFamily: root.fontFamily
         foreground: root.foreground
