@@ -184,14 +184,41 @@ class DriveManager:
             pass
 
     def get_quota(self, remote_name: str, force_refresh: bool = False) -> dict:
-        """Fetch quota for a remote using 'rclone about <remote>: --json' with caching."""
-        cache = self._load_quota_cache()
+        """Fetch quota for a remote using statvfs when mounted or 'rclone about' with caching."""
         now = time.time()
-        cached = cache.get(remote_name)
 
-        # 10 minute cache unless force_refresh
-        if not force_refresh and cached and (now - cached.get("timestamp", 0) < 600):
-            return cached.get("data", {})
+        # 1. If remote is mounted, statvfs provides instant, accurate, non-blocking quota metrics
+        is_mounted, mount_path = self.is_remote_mounted(remote_name)
+        if is_mounted and os.path.exists(mount_path):
+            try:
+                st = os.statvfs(mount_path)
+                total = st.f_blocks * st.f_frsize
+                free = st.f_bavail * st.f_frsize
+                used = max(0, total - free)
+                if total > 0:
+                    percent = round(used / total * 100.0, 1)
+                    quota_data = {
+                        "total": total,
+                        "used": used,
+                        "free": free,
+                        "trashed": 0,
+                        "percent": percent,
+                        "known": True,
+                    }
+                    cache = self._load_quota_cache()
+                    cache[remote_name] = {"timestamp": now, "data": quota_data}
+                    self._save_quota_cache(cache)
+                    return quota_data
+            except OSError:
+                pass
+
+        # 2. Check existing cache
+        cache = self._load_quota_cache()
+        cached = cache.get(remote_name)
+        if cached and cached.get("data", {}).get("known"):
+            # If we have known cached data and not force refresh, use it for up to 15 minutes
+            if not force_refresh and (now - cached.get("timestamp", 0) < 900):
+                return cached.get("data", {})
 
         if not self.rclone_bin:
             return {}
@@ -205,12 +232,13 @@ class DriveManager:
             "known": False,
         }
 
+        # 3. Query rclone about for unmounted remotes
         try:
             res = subprocess.run(
                 [self.rclone_bin, "about", f"{remote_name}:", "--json"],
                 capture_output=True,
                 text=True,
-                timeout=6,
+                timeout=12,
                 check=False,
             )
             if res.returncode == 0 and res.stdout.strip():
@@ -221,38 +249,58 @@ class DriveManager:
                 trashed = int(about.get("trashed", 0) or 0)
                 percent = (used / total * 100.0) if total > 0 else 0.0
 
-                quota_data = {
-                    "total": total,
-                    "used": used,
-                    "free": free,
-                    "trashed": trashed,
-                    "percent": round(percent, 1),
-                    "known": total > 0,
-                }
+                if total > 0:
+                    quota_data = {
+                        "total": total,
+                        "used": used,
+                        "free": free,
+                        "trashed": trashed,
+                        "percent": round(percent, 1),
+                        "known": True,
+                    }
+                    cache[remote_name] = {"timestamp": now, "data": quota_data}
+                    self._save_quota_cache(cache)
+                    return quota_data
         except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
             pass
 
-        # Save to cache
-        cache[remote_name] = {"timestamp": now, "data": quota_data}
+        # If rclone about failed but we have a previous known quota, retain it
+        if cached and cached.get("data", {}).get("known"):
+            return cached.get("data", {})
+
+        # Cache transient failure for only 30 seconds
+        cache[remote_name] = {"timestamp": now - 570, "data": quota_data}
         self._save_quota_cache(cache)
         return quota_data
 
-    def scan_recent_files(self, remote_name: str, limit: int = 8) -> List[dict]:
-        """Scan recently modified files in a mounted drive directory."""
+    def scan_recent_files(self, remote_name: str, limit: int = 8, max_depth: int = 2) -> List[dict]:
+        """Scan recently modified files in a mounted drive directory with depth bounding."""
         is_mounted, mount_path = self.is_remote_mounted(remote_name)
         if not is_mounted or not os.path.exists(mount_path):
             return []
 
         recent = []
         counter = 0
+        mount_depth = mount_path.rstrip(os.sep).count(os.sep)
+        max_files_to_check = 250
+        checked = 0
+
         try:
             for root, dirs, files in os.walk(mount_path):
+                # Depth limiter prevents slow deep directory crawling over FUSE
+                current_depth = root.rstrip(os.sep).count(os.sep) - mount_depth
+                if current_depth >= max_depth:
+                    dirs.clear()
+
                 # Don't follow symlinks
                 dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
                 # Ignore hidden directories like .cache, .tmp, and OneDrive Personal Vault
                 dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() != "personal vault"]
 
                 for name in files:
+                    if checked >= max_files_to_check:
+                        break
+                    checked += 1
                     if name.startswith("."):
                         continue
                     file_path = os.path.join(root, name)
