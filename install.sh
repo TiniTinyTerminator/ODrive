@@ -70,9 +70,8 @@ ln -sf "$PLUGIN_DIR/bin/odrive" "$BIN_DIR/odrive"
 chmod +x "$BIN_DIR/odrive"
 echo "✓ Installed CLI to $BIN_DIR/odrive"
 
-# Install desktop entry
-cp "$SRC/assets/odrive.desktop" "$DESKTOP_DIR/"
-echo "✓ Installed desktop application entry"
+# Clean up any legacy desktop entry
+rm -f "$DESKTOP_DIR/odrive.desktop"
 
 reload_shell
 
@@ -85,6 +84,5 @@ fi
 
 echo
 echo "🎉 ODrive installation complete!"
-echo "  • Open bar widget: Click the Cloud icon in your Omarchy bar"
-echo "  • Launch via CLI:  odrive status | odrive setup | odrive mount-all"
-echo "  • Summon panel:    odrive gui"
+echo "  • Bar widget: Click the Cloud icon in your Omarchy bar"
+echo "  • CLI:        odrive status | odrive setup | odrive mount-all"

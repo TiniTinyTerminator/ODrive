@@ -23,9 +23,8 @@ ODrive is a native Omarchy desktop plugin and CLI tool that brings all your clou
   - **In-Panel GUI Account Setup**: Add new cloud remotes directly through the widget without opening a terminal window. Supports browser-based OAuth for Google Drive, OneDrive, Dropbox, Box, pCloud, and direct credentials for Nextcloud, WebDAV, S3, and Proton Drive.
   - **Settings View**: Toggle auto-mount on login and configure root paths directly from the widget.
 - **Robust CLI & Automation**:
-  - Full-featured `odrive` command line utility (`odrive status`, `odrive mount`, `odrive set-path`, `odrive add-oauth`, `odrive gui`).
+  - Full-featured `odrive` command line utility (`odrive status`, `odrive mount`, `odrive set-path`, `odrive add-oauth`).
   - Systemd user service for auto-mounting drives on login.
-  - Seamless IPC summoning via `odrive gui` or `omarchy-shell shell summon ttt.odrive`.
 
 ---
 
@@ -49,8 +48,7 @@ This will:
 1. Validate the plugin against the Omarchy manifest schema.
 2. Install the plugin into `~/.config/omarchy/plugins/ttt.odrive`.
 3. Symlink the CLI tool to `~/.local/bin/odrive`.
-4. Register the desktop application launcher.
-5. Enable the widget in the right section of your Omarchy bar.
+4. Enable the widget in the right section of your Omarchy bar.
 
 For active development, use symlink mode:
 ```bash
@@ -129,9 +127,6 @@ odrive unmount-all
 odrive open MyDrive
 odrive open              # opens ~/Cloud
 
-# Summon the desktop panel
-odrive gui
-
 # Remove a cloud drive configuration
 odrive remove MyDrive
 ```
@@ -205,8 +200,7 @@ ODrive/
 │   ├── Model.js             # Utility functions & formatting helpers
 │   └── qmldir               # QML component registrations
 ├── assets/
-│   ├── icon.svg             # Application vector icon
-│   └── odrive.desktop       # Desktop entry (summons bar widget)
+│   └── icon.svg             # Application vector icon
 └── systemd/
     └── odrive-automount.service # User systemd service template
 ```

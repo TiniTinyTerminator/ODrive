@@ -209,14 +209,6 @@ def open_drive_folder(remote_name: str = ""):
         print(f"Directory: {path}")
 
 
-def summon_gui():
-    """Summon ODrive panel via omarchy-shell IPC."""
-    shell_bin = shutil.which("omarchy-shell")
-    if shell_bin:
-        subprocess.run([shell_bin, "shell", "summon", "ttt.odrive", "{}"], capture_output=True)
-    else:
-        print("omarchy-shell not found.")
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -307,9 +299,6 @@ def main():
     p_test = subparsers.add_parser("test-remote", help="Test connection to a remote")
     p_test.add_argument("remote", help="Remote name")
 
-    # gui / summon
-    subparsers.add_parser("gui", help="Open the ODrive bar widget panel")
-    subparsers.add_parser("app", help="Open the ODrive bar widget panel")
 
     args = parser.parse_args()
     manager = DriveManager()
@@ -488,8 +477,6 @@ def main():
         ok, msg = manager.test_remote(args.remote)
         print(json.dumps({"ok": ok, "message": msg}))
 
-    elif args.command in ("gui", "summon", "app"):
-        summon_gui()
 
 
 if __name__ == "__main__":
