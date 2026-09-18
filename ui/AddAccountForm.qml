@@ -18,17 +18,22 @@ Item {
   property color dim: Qt.darker(foreground, 1.55)
   property string fontFamily: Style.font.family
 
-  // Selected provider: null shows the gallery of cloud providers
+  // Selected provider: null shows the provider list
   property var selectedProvider: null
 
-  // Form state
+  // Form inputs
   property string remoteName: ""
+  property string mountPath: ""
   property bool mountImmediate: true
   property bool showPassword: false
   property bool showAdvancedOAuth: false
   property string s3Preset: "AWS"
 
   signal accountAdded(string remoteName)
+  signal cancelled()
+
+  implicitWidth: parent ? parent.width : Style.space(380)
+  implicitHeight: mainCol.implicitHeight
 
   function selectProvider(provId) {
     if (!provId || provId === "") {
@@ -60,6 +65,7 @@ Item {
       }
     }
     root.remoteName = name
+    root.mountPath = (root.backend ? root.backend.mountRoot : "~/Cloud") + "/" + name
   }
 
   Connections {
@@ -71,7 +77,7 @@ Item {
 
   Timer {
     id: successTimer
-    interval: 1400
+    interval: 1200
     repeat: false
     onTriggered: {
       root.accountAdded(root.remoteName)
@@ -79,736 +85,443 @@ Item {
     }
   }
 
-  // ==========================================================================
-  // VIEW 1: PROVIDER GALLERY
-  // ==========================================================================
-  Flickable {
-    id: galleryFlick
-    visible: root.selectedProvider === null
-    anchors.fill: parent
-    contentWidth: width
-    contentHeight: galleryCol.implicitHeight + Style.space(40)
-    clip: true
-    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+  ColumnLayout {
+    id: mainCol
+    width: parent.width
+    spacing: Style.space(10)
 
-    ColumnLayout {
-      id: galleryCol
-      anchors {
-        left: parent.left
-        right: parent.right
-        top: parent.top
-        margins: Style.space(20)
+    // ========================================================================
+    // HEADER BAR
+    // ========================================================================
+    RowLayout {
+      Layout.fillWidth: true
+      spacing: Style.space(8)
+
+      Button {
+        iconText: "󰁝"
+        text: root.selectedProvider ? "Providers" : "Close"
+        fontFamily: root.fontFamily
+        fontSize: Style.font.caption
+        foreground: root.foreground
+        bordered: true
+        onClicked: {
+          if (root.backend && root.backend.authWaiting) {
+            root.backend.cancelAuth()
+          }
+          if (root.selectedProvider) {
+            root.selectedProvider = null
+          } else {
+            root.cancelled()
+          }
+        }
       }
-      spacing: Style.space(16)
 
-      Column {
-        spacing: Style.space(4)
+      Text {
+        Layout.fillWidth: true
+        text: root.selectedProvider ? (root.selectedProvider.name + " Setup") : "Connect Cloud Drive"
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        color: root.foreground
+        elide: Text.ElideRight
+      }
 
+      if (root.selectedProvider) {
         Text {
-          text: "Connect New Cloud Account"
+          text: root.selectedProvider.glyph || "󰅟"
+          color: root.selectedProvider.color || Color.accent
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
+        }
+      }
+    }
+
+    // Success Banner
+    BorderSurface {
+      visible: root.backend && root.backend.authSuccess
+      Layout.fillWidth: true
+      implicitHeight: successRow.implicitHeight + Style.space(16)
+      radius: Style.cornerRadius
+      color: Qt.rgba(0.1, 0.6, 0.2, 0.15)
+      borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
+
+      RowLayout {
+        id: successRow
+        anchors {
+          fill: parent
+          margins: Style.space(8)
+        }
+        spacing: Style.space(8)
+
+        Text {
+          text: "󰄬"
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          color: Color.accent
+        }
+
+        Text {
+          Layout.fillWidth: true
+          text: root.backend ? root.backend.authSuccessMessage : "Drive connected successfully!"
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
           font.bold: true
           color: root.foreground
         }
+      }
+    }
+
+    // Error Banner
+    BorderSurface {
+      visible: root.backend && root.backend.authError !== ""
+      Layout.fillWidth: true
+      implicitHeight: errorRow.implicitHeight + Style.space(16)
+      radius: Style.cornerRadius
+      color: Qt.rgba(0.8, 0.1, 0.1, 0.15)
+      borderSpec: Border.controlSpec("normal", root.urgent, root.urgent)
+
+      RowLayout {
+        id: errorRow
+        anchors {
+          fill: parent
+          margins: Style.space(8)
+        }
+        spacing: Style.space(8)
 
         Text {
-          text: "Choose a cloud storage provider to add. ODrive configures everything in the background without needing a terminal."
+          text: "󰅚"
           font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          color: root.dim
+          font.pixelSize: Style.font.body
+          color: root.urgent
+        }
+
+        Text {
+          Layout.fillWidth: true
+          text: root.backend ? root.backend.authError : ""
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption - Style.space(1)
+          color: root.foreground
+          wrapMode: Text.WordWrap
+        }
+
+        PanelActionButton {
+          iconText: "󰅖"
+          tooltipText: "Dismiss"
+          foreground: root.foreground
+          hoverColor: root.urgent
+          onClicked: {
+            if (root.backend) root.backend.authError = ""
+          }
         }
       }
+    }
 
-      Flow {
-        Layout.fillWidth: true
-        spacing: Style.space(12)
+    // ========================================================================
+    // VIEW 1: PROVIDER SELECTION LIST
+    // ========================================================================
+    ColumnLayout {
+      visible: root.selectedProvider === null
+      Layout.fillWidth: true
+      spacing: Style.space(4)
 
-        Repeater {
-          model: Model.ALL_PROVIDERS
+      Text {
+        text: "Select a Cloud Service:"
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        color: root.dim
+      }
 
-          BorderSurface {
-            id: pCard
-            property var prov: modelData
-            implicitWidth: Style.space(235)
-            implicitHeight: Style.space(145)
-            radius: Style.cornerRadius
-            color: pCardMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(1, 1, 1, 0.03)
-            borderSpec: Border.controlSpec(pCardMouse.containsMouse ? "hover-cursor" : "normal", root.foreground, Color.accent)
+      Repeater {
+        model: Model.ALL_PROVIDERS
 
-            ColumnLayout {
-              anchors {
-                fill: parent
-                margins: Style.space(14)
-              }
-              spacing: Style.space(8)
+        CursorSurface {
+          id: provRow
+          property var prov: modelData
+          Layout.fillWidth: true
+          implicitHeight: Style.space(46)
+          radius: Style.cornerRadius
+          hasCursor: provMouse.containsMouse
 
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(10)
+          MouseArea {
+            id: provMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.selectProvider(prov.id)
+          }
 
-                Rectangle {
-                  implicitWidth: Style.space(34)
-                  implicitHeight: Style.space(34)
-                  radius: Style.cornerRadius
-                  color: prov.color ? Qt.alpha(prov.color, 0.15) : Qt.rgba(1, 1, 1, 0.08)
+          RowLayout {
+            anchors {
+              fill: parent
+              leftMargin: Style.space(8)
+              rightMargin: Style.space(8)
+            }
+            spacing: Style.space(10)
 
-                  Text {
-                    anchors.centerIn: parent
-                    text: prov.glyph || "󰅟"
-                    color: prov.color || root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.heading
-                  }
-                }
-
-                Column {
-                  Layout.fillWidth: true
-                  spacing: 0
-
-                  Text {
-                    text: prov.name
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    font.bold: true
-                    color: root.foreground
-                    elide: Text.ElideRight
-                    width: parent.width
-                  }
-
-                  Text {
-                    text: prov.category
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption - Style.space(2)
-                    color: root.dim
-                  }
-                }
-              }
+            // Provider Icon
+            Rectangle {
+              implicitWidth: Style.space(30)
+              implicitHeight: Style.space(30)
+              radius: Style.cornerRadius
+              color: prov.color ? Qt.alpha(prov.color, 0.15) : Qt.rgba(1, 1, 1, 0.08)
 
               Text {
-                Layout.fillWidth: true
-                text: prov.description
+                anchors.centerIn: parent
+                text: prov.glyph || "󰅟"
+                color: prov.color || root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption - Style.space(1)
-                color: root.dim
-                wrapMode: Text.WordWrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
-              }
-
-              Item { Layout.fillHeight: true }
-
-              RowLayout {
-                Layout.fillWidth: true
-
-                // Pill tag
-                Rectangle {
-                  implicitHeight: Style.space(18)
-                  implicitWidth: tagText.implicitWidth + Style.space(10)
-                  radius: Style.cornerRadius
-                  color: Qt.rgba(1, 1, 1, 0.05)
-
-                  Text {
-                    id: tagText
-                    anchors.centerIn: parent
-                    text: prov.authTag || "Setup"
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption - Style.space(3)
-                    color: root.dim
-                  }
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Text {
-                  text: "Configure →"
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                  color: pCardMouse.containsMouse ? Color.accent : root.dim
-                }
+                font.pixelSize: Style.font.icon
               }
             }
 
-            MouseArea {
-              id: pCardMouse
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.selectProvider(prov.id)
+            // Name & Category
+            Column {
+              Layout.fillWidth: true
+              spacing: 0
+
+              Text {
+                text: prov.name
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                color: root.foreground
+                elide: Text.ElideRight
+                width: parent.width
+              }
+
+              Text {
+                text: prov.authTag + " • " + prov.category
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption - Style.space(2)
+                color: root.dim
+              }
+            }
+
+            Text {
+              text: "󰅂"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: provMouse.containsMouse ? Color.accent : root.dim
             }
           }
         }
       }
     }
-  }
 
-  // ==========================================================================
-  // VIEW 2: PROVIDER CONFIGURATION FORM
-  // ==========================================================================
-  Flickable {
-    id: formFlick
-    visible: root.selectedProvider !== null
-    anchors.fill: parent
-    contentWidth: width
-    contentHeight: formCol.implicitHeight + Style.space(40)
-    clip: true
-    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
+    // ========================================================================
+    // VIEW 2: PROVIDER CONFIGURATION FORM
+    // ========================================================================
     ColumnLayout {
-      id: formCol
-      anchors {
-        left: parent.left
-        right: parent.right
-        top: parent.top
-        margins: Style.space(20)
-      }
-      spacing: Style.space(16)
+      visible: root.selectedProvider !== null
+      Layout.fillWidth: true
+      spacing: Style.space(10)
 
-      // Header Navigation
-      RowLayout {
-        Layout.fillWidth: true
-        spacing: Style.space(12)
-
-        Button {
-          iconText: "󰁝"
-          text: "All Providers"
-          fontFamily: root.fontFamily
-          foreground: root.foreground
-          bordered: true
-          onClicked: {
-            if (root.backend && root.backend.authWaiting) {
-              root.backend.cancelAuth()
-            }
-            root.selectedProvider = null
-          }
-        }
-
-        Item { Layout.fillWidth: true }
-
-        if (root.selectedProvider) {
-          RowLayout {
-            spacing: Style.space(8)
-
-            Text {
-              text: root.selectedProvider.glyph || "󰅟"
-              color: root.selectedProvider.color || root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.heading
-            }
-
-            Text {
-              text: root.selectedProvider.name + " Configuration"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-              color: root.foreground
-            }
-          }
-        }
-      }
-
-      // Success Banner
-      BorderSurface {
-        visible: root.backend && root.backend.authSuccess
-        Layout.fillWidth: true
-        implicitHeight: successRow.implicitHeight + Style.space(20)
-        radius: Style.cornerRadius
-        color: Qt.rgba(0.1, 0.6, 0.2, 0.15)
-        borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
-
-        RowLayout {
-          id: successRow
-          anchors {
-            fill: parent
-            margins: Style.space(12)
-          }
-          spacing: Style.space(10)
-
-          Text {
-            text: "󰄬"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.heading
-            color: Color.accent
-          }
-
-          Text {
-            Layout.fillWidth: true
-            text: root.backend ? root.backend.authSuccessMessage : "Drive configured successfully!"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            color: root.foreground
-          }
-        }
-      }
-
-      // Error Banner
-      BorderSurface {
-        visible: root.backend && root.backend.authError !== ""
-        Layout.fillWidth: true
-        implicitHeight: errorRow.implicitHeight + Style.space(20)
-        radius: Style.cornerRadius
-        color: Qt.rgba(0.8, 0.1, 0.1, 0.15)
-        borderSpec: Border.controlSpec("normal", root.urgent, root.urgent)
-
-        RowLayout {
-          id: errorRow
-          anchors {
-            fill: parent
-            margins: Style.space(12)
-          }
-          spacing: Style.space(10)
-
-          Text {
-            text: "󰅚"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.heading
-            color: root.urgent
-          }
-
-          Text {
-            Layout.fillWidth: true
-            text: root.backend ? root.backend.authError : ""
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            color: root.foreground
-            wrapMode: Text.WordWrap
-          }
-
-          PanelActionButton {
-            iconText: "󰅖"
-            tooltipText: "Dismiss"
-            foreground: root.foreground
-            hoverColor: root.urgent
-            onClicked: {
-              if (root.backend) root.backend.authError = ""
-            }
-          }
-        }
-      }
-
-      // ----------------------------------------------------------------------
-      // SECTION 1: REMOTE NAME & MOUNT PREFERENCES
-      // ----------------------------------------------------------------------
+      // Section 1: Name & Mount Location
       BorderSurface {
         Layout.fillWidth: true
-        implicitHeight: generalSecCol.implicitHeight + Style.space(24)
+        implicitHeight: idCol.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
         color: Qt.rgba(1, 1, 1, 0.03)
         borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
 
         ColumnLayout {
-          id: generalSecCol
+          id: idCol
           anchors {
             fill: parent
-            margins: Style.space(14)
+            margins: Style.space(10)
           }
-          spacing: Style.space(12)
+          spacing: Style.space(8)
 
-          Text {
-            text: "Drive Identification"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            color: root.foreground
-          }
-
-          RowLayout {
+          // Remote Name
+          ColumnLayout {
             Layout.fillWidth: true
-            spacing: Style.space(12)
+            spacing: Style.space(2)
 
-            Column {
-              Layout.preferredWidth: Style.space(160)
-              spacing: 0
-
-              Text {
-                text: "Remote Name:"
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                color: root.foreground
-              }
-
-              Text {
-                text: "Folder in ~/Cloud"
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption - Style.space(2)
-                color: root.dim
-              }
+            Text {
+              text: "Drive Name:"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              color: root.foreground
             }
 
             TextField {
-              id: remoteNameField
+              id: nameInputField
               Layout.fillWidth: true
               text: root.remoteName
-              placeholderText: "e.g. MyCloudDrive"
-              onTextChanged: { root.remoteName = text }
+              placeholderText: "e.g. MyDrive"
+              onTextChanged: {
+                root.remoteName = text
+                if (!mountPathInputField.activeFocus) {
+                  root.mountPath = (root.backend ? root.backend.mountRoot : "~/Cloud") + "/" + text
+                }
+              }
             }
           }
 
+          // Custom Mount Location
+          ColumnLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(2)
+
+            Text {
+              text: "Mount Directory:"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              color: root.foreground
+            }
+
+            TextField {
+              id: mountPathInputField
+              Layout.fillWidth: true
+              text: root.mountPath
+              placeholderText: "~/Cloud/" + root.remoteName
+              onTextChanged: { root.mountPath = text }
+            }
+
+            Text {
+              text: "Folder path on your computer where files will be attached"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption - Style.space(2)
+              color: root.dim
+            }
+          }
+
+          // Auto-mount switch
           RowLayout {
             Layout.fillWidth: true
-            spacing: Style.space(12)
+            spacing: Style.space(8)
 
-            Column {
+            Text {
               Layout.fillWidth: true
-              spacing: 0
-
-              Text {
-                text: "Mount immediately upon connection"
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                color: root.foreground
-              }
-
-              Text {
-                text: "Attaches drive to ~/Cloud/" + (root.remoteName || "drive") + " as soon as setup finishes"
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption - Style.space(2)
-                color: root.dim
-              }
+              text: "Mount immediately upon connection"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              color: root.foreground
             }
 
             ToggleSwitch {
               checked: root.mountImmediate
               foreground: root.foreground
-              onToggled: root.mountImmediate = !root.mountImmediate
+              onToggled: { root.mountImmediate = !root.mountImmediate }
             }
           }
         }
       }
 
-      // ----------------------------------------------------------------------
-      // SECTION 2: AUTHENTICATION (DYNAMIC PER PROVIDER)
-      // ----------------------------------------------------------------------
+      // Section 2: Authentication
 
-      // ----------------------------------------------------------------------
-      // A. OAuth Providers (Google Drive, OneDrive, Dropbox, Box, pCloud)
-      // ----------------------------------------------------------------------
-      BorderSurface {
+      // A. OAuth Provider
+      ColumnLayout {
         visible: root.selectedProvider && root.selectedProvider.authType === "oauth"
         Layout.fillWidth: true
-        implicitHeight: oauthSecCol.implicitHeight + Style.space(24)
-        radius: Style.cornerRadius
-        color: Qt.rgba(1, 1, 1, 0.03)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        spacing: Style.space(8)
 
-        ColumnLayout {
-          id: oauthSecCol
-          anchors {
-            fill: parent
-            margins: Style.space(14)
-          }
-          spacing: Style.space(14)
+        // Waiting Card
+        BorderSurface {
+          visible: root.backend && root.backend.authWaiting
+          Layout.fillWidth: true
+          implicitHeight: waitCol.implicitHeight + Style.space(20)
+          radius: Style.cornerRadius
+          color: Qt.alpha(Color.accent, 0.1)
+          borderSpec: Border.controlSpec("focus", root.foreground, Color.accent)
 
-          Text {
-            text: "Browser Authentication (OAuth 2.0)"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            color: root.foreground
-          }
-
-          // Active Waiting Card
-          BorderSurface {
-            visible: root.backend && root.backend.authWaiting
-            Layout.fillWidth: true
-            implicitHeight: waitCol.implicitHeight + Style.space(24)
-            radius: Style.cornerRadius
-            color: Qt.alpha(Color.accent, 0.1)
-            borderSpec: Border.controlSpec("focus", root.foreground, Color.accent)
-
-            ColumnLayout {
-              id: waitCol
-              anchors {
-                fill: parent
-                margins: Style.space(14)
-              }
-              spacing: Style.space(10)
-
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(10)
-
-                Text {
-                  text: "󰑐"
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.display
-                  color: Color.accent
-                  RotationAnimator on rotation {
-                    running: root.backend && root.backend.authWaiting
-                    from: 0
-                    to: 360
-                    loops: Animation.Infinite
-                    duration: 1800
-                  }
-                }
-
-                Column {
-                  Layout.fillWidth: true
-                  spacing: Style.space(2)
-
-                  Text {
-                    text: "Waiting for Browser Authorization…"
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                    color: root.foreground
-                  }
-
-                  Text {
-                    text: "1. Please switch to your web browser window.\n2. Log in and grant ODrive permission to access your storage.\n3. ODrive will automatically detect authorization and attach your drive."
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    color: root.foreground
-                    wrapMode: Text.WordWrap
-                    width: parent.width
-                  }
-                }
-              }
-
-              Button {
-                Layout.alignment: Qt.AlignRight
-                iconText: "󰅚"
-                text: "Cancel Authorization"
-                fontFamily: root.fontFamily
-                foreground: root.urgent
-                bordered: true
-                onClicked: {
-                  if (root.backend) root.backend.cancelAuth()
-                }
-              }
-            }
-          }
-
-          // Ready to authorize info
           ColumnLayout {
-            visible: !(root.backend && root.backend.authWaiting)
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              Layout.fillWidth: true
-              text: "Clicking Authorize below will open your default web browser where you can log in directly on the official " + (root.selectedProvider ? root.selectedProvider.name : "") + " authentication page. Your credentials are never handled by ODrive."
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              color: root.dim
-              wrapMode: Text.WordWrap
+            id: waitCol
+            anchors {
+              fill: parent
+              margins: Style.space(10)
             }
+            spacing: Style.space(8)
 
-            // Advanced Options Toggle
             RowLayout {
               Layout.fillWidth: true
+              spacing: Style.space(10)
 
-              Button {
-                text: root.showAdvancedOAuth ? "Hide Advanced OAuth Settings" : "Custom Client ID & Secret (Optional)"
-                iconText: root.showAdvancedOAuth ? "󰅃" : "󰅀"
-                fontFamily: root.fontFamily
-                fontSize: Style.font.caption
-                foreground: root.dim
-                bordered: false
-                onClicked: { root.showAdvancedOAuth = !root.showAdvancedOAuth }
-              }
-
-              Item { Layout.fillWidth: true }
-            }
-
-            // Advanced Fields
-            ColumnLayout {
-              visible: root.showAdvancedOAuth
-              Layout.fillWidth: true
-              spacing: Style.space(8)
-
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(12)
-
-                Text {
-                  text: "Client ID:"
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  color: root.dim
-                  Layout.preferredWidth: Style.space(120)
-                }
-
-                TextField {
-                  id: oauthClientIdField
-                  Layout.fillWidth: true
-                  placeholderText: "Leave blank to use default rclone app"
+              Text {
+                text: "󰑐"
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.heading
+                color: Color.accent
+                RotationAnimator on rotation {
+                  running: root.backend && root.backend.authWaiting
+                  from: 0
+                  to: 360
+                  loops: Animation.Infinite
+                  duration: 1800
                 }
               }
 
-              RowLayout {
+              Column {
                 Layout.fillWidth: true
-                spacing: Style.space(12)
+                spacing: Style.space(1)
 
                 Text {
-                  text: "Client Secret:"
+                  text: "Waiting for Browser Sign-in…"
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  color: root.dim
-                  Layout.preferredWidth: Style.space(120)
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  color: root.foreground
                 }
 
-                TextField {
-                  id: oauthClientSecretField
-                  Layout.fillWidth: true
-                  placeholderText: "Leave blank to use default rclone app"
-                  password: true
+                Text {
+                  text: "Complete login in your web browser. ODrive will detect completion automatically."
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption - Style.space(1)
+                  color: root.foreground
+                  wrapMode: Text.WordWrap
+                  width: parent.width
                 }
               }
             }
 
-            // Action Button
             Button {
-              Layout.fillWidth: true
-              implicitHeight: Style.space(42)
-              text: "Authorize with " + (root.selectedProvider ? root.selectedProvider.name : "") + " in Browser"
-              iconText: root.selectedProvider ? root.selectedProvider.glyph : "󰊭"
+              Layout.alignment: Qt.AlignRight
+              text: "Cancel Authorization"
               fontFamily: root.fontFamily
-              fontBold: true
-              foreground: root.foreground
+              fontSize: Style.font.caption
+              foreground: root.urgent
               bordered: true
               onClicked: {
-                if (!root.remoteName || root.remoteName.trim() === "") {
-                  root.suggestName(root.selectedProvider)
-                }
-                if (root.backend) {
-                  root.backend.addOAuth(
-                    root.remoteName.trim(),
-                    root.selectedProvider.id,
-                    oauthClientIdField.text.trim(),
-                    oauthClientSecretField.text.trim(),
-                    root.mountImmediate
-                  )
-                }
+                if (root.backend) root.backend.cancelAuth()
               }
             }
           }
         }
-      }
 
-      // ----------------------------------------------------------------------
-      // B. Nextcloud / ownCloud
-      // ----------------------------------------------------------------------
-      BorderSurface {
-        visible: root.selectedProvider && root.selectedProvider.id === "nextcloud"
-        Layout.fillWidth: true
-        implicitHeight: nextcloudSecCol.implicitHeight + Style.space(24)
-        radius: Style.cornerRadius
-        color: Qt.rgba(1, 1, 1, 0.03)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
-
+        // Ready to authorize
         ColumnLayout {
-          id: nextcloudSecCol
-          anchors {
-            fill: parent
-            margins: Style.space(14)
-          }
-          spacing: Style.space(12)
-
-          Text {
-            text: "Nextcloud Server Credentials"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            color: root.foreground
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Server URL:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: ncUrlField
-              Layout.fillWidth: true
-              placeholderText: "https://cloud.example.com"
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Username:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: ncUserField
-              Layout.fillWidth: true
-              placeholderText: "username"
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "App Password:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: ncPassField
-              Layout.fillWidth: true
-              placeholderText: "Password or App Token"
-              password: !root.showPassword
-            }
-
-            PanelActionButton {
-              iconText: root.showPassword ? "󰈈" : "󰈉"
-              tooltipText: root.showPassword ? "Hide password" : "Show password"
-              foreground: root.foreground
-              onClicked: { root.showPassword = !root.showPassword }
-            }
-          }
+          visible: !(root.backend && root.backend.authWaiting)
+          Layout.fillWidth: true
+          spacing: Style.space(8)
 
           Text {
             Layout.fillWidth: true
-            text: "Tip: For accounts with 2-Factor Authentication, create an App Password in Nextcloud under Personal Settings → Security."
+            text: "Clicking Authorize opens your web browser to securely sign in with " + (root.selectedProvider ? root.selectedProvider.name : "") + ". No passwords are stored locally."
             font.family: root.fontFamily
-            font.pixelSize: Style.font.caption - Style.space(2)
+            font.pixelSize: Style.font.caption
             color: root.dim
             wrapMode: Text.WordWrap
           }
 
           Button {
             Layout.fillWidth: true
-            implicitHeight: Style.space(42)
-            text: (root.backend && root.backend.authBusy) ? "Verifying & Connecting…" : "Connect & Mount Nextcloud"
-            iconText: "󰒋"
+            implicitHeight: Style.space(38)
+            text: "Authorize in Browser"
+            iconText: root.selectedProvider ? root.selectedProvider.glyph : "󰊭"
             fontFamily: root.fontFamily
             fontBold: true
             foreground: root.foreground
             bordered: true
             onClicked: {
-              if (!root.remoteName || root.remoteName.trim() === "") root.suggestName(root.selectedProvider)
               if (root.backend) {
-                root.backend.addCredentials(
+                root.backend.addOAuth(
                   root.remoteName.trim(),
-                  "nextcloud",
-                  {
-                    url: ncUrlField.text.trim(),
-                    user: ncUserField.text.trim(),
-                    pass: ncPassField.text.trim()
-                  },
+                  root.selectedProvider.id,
+                  "",
+                  "",
+                  root.mountPath.trim(),
                   root.mountImmediate
                 )
               }
@@ -817,410 +530,281 @@ Item {
         }
       }
 
-      // ----------------------------------------------------------------------
+      // B. Nextcloud / ownCloud
+      ColumnLayout {
+        visible: root.selectedProvider && root.selectedProvider.id === "nextcloud"
+        Layout.fillWidth: true
+        spacing: Style.space(8)
+
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+
+          Text {
+            text: "Server Address:"
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            color: root.foreground
+          }
+
+          TextField {
+            id: ncUrlField
+            Layout.fillWidth: true
+            placeholderText: "https://cloud.example.com"
+          }
+        }
+
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+
+          Text {
+            text: "Username:"
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            color: root.foreground
+          }
+
+          TextField {
+            id: ncUserField
+            Layout.fillWidth: true
+            placeholderText: "username"
+          }
+        }
+
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+
+          RowLayout {
+            Layout.fillWidth: true
+            Text {
+              text: "App Password:"
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              color: root.foreground
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+              text: root.showPassword ? "Hide" : "Show"
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption - Style.space(2)
+              foreground: root.dim
+              bordered: false
+              onClicked: { root.showPassword = !root.showPassword }
+            }
+          }
+
+          TextField {
+            id: ncPassField
+            Layout.fillWidth: true
+            placeholderText: "Password or App Token"
+            password: !root.showPassword
+          }
+        }
+
+        Button {
+          Layout.fillWidth: true
+          implicitHeight: Style.space(38)
+          text: (root.backend && root.backend.authBusy) ? "Connecting…" : "Connect & Mount Nextcloud"
+          iconText: "󰒋"
+          fontFamily: root.fontFamily
+          fontBold: true
+          foreground: root.foreground
+          bordered: true
+          onClicked: {
+            if (root.backend) {
+              root.backend.addCredentials(
+                root.remoteName.trim(),
+                "nextcloud",
+                {
+                  url: ncUrlField.text.trim(),
+                  user: ncUserField.text.trim(),
+                  pass: ncPassField.text.trim()
+                },
+                root.mountPath.trim(),
+                root.mountImmediate
+              )
+            }
+          }
+        }
+      }
+
       // C. Generic WebDAV
-      // ----------------------------------------------------------------------
-      BorderSurface {
+      ColumnLayout {
         visible: root.selectedProvider && root.selectedProvider.id === "webdav"
         Layout.fillWidth: true
-        implicitHeight: webdavSecCol.implicitHeight + Style.space(24)
-        radius: Style.cornerRadius
-        color: Qt.rgba(1, 1, 1, 0.03)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        spacing: Style.space(8)
 
         ColumnLayout {
-          id: webdavSecCol
-          anchors {
-            fill: parent
-            margins: Style.space(14)
-          }
-          spacing: Style.space(12)
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+          Text { text: "WebDAV URL:"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true; color: root.foreground }
+          TextField { id: wdUrlField; Layout.fillWidth: true; placeholderText: "https://dav.example.com/remote.php/webdav" }
+        }
 
-          Text {
-            text: "WebDAV Server Configuration"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            color: root.foreground
-          }
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+          Text { text: "Username:"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true; color: root.foreground }
+          TextField { id: wdUserField; Layout.fillWidth: true; placeholderText: "username" }
+        }
 
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+          Text { text: "Password:"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true; color: root.foreground }
+          TextField { id: wdPassField; Layout.fillWidth: true; placeholderText: "Password"; password: !root.showPassword }
+        }
 
-            Text {
-              text: "WebDAV URL:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: wdUrlField
-              Layout.fillWidth: true
-              placeholderText: "https://dav.example.com/remote.php/webdav"
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Username:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: wdUserField
-              Layout.fillWidth: true
-              placeholderText: "Username"
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Password:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: wdPassField
-              Layout.fillWidth: true
-              placeholderText: "Password"
-              password: !root.showPassword
-            }
-
-            PanelActionButton {
-              iconText: root.showPassword ? "󰈈" : "󰈉"
-              tooltipText: root.showPassword ? "Hide password" : "Show password"
-              foreground: root.foreground
-              onClicked: { root.showPassword = !root.showPassword }
-            }
-          }
-
-          Button {
-            Layout.fillWidth: true
-            implicitHeight: Style.space(42)
-            text: (root.backend && root.backend.authBusy) ? "Verifying & Connecting…" : "Connect & Mount WebDAV"
-            iconText: "󰒋"
-            fontFamily: root.fontFamily
-            fontBold: true
-            foreground: root.foreground
-            bordered: true
-            onClicked: {
-              if (!root.remoteName || root.remoteName.trim() === "") root.suggestName(root.selectedProvider)
-              if (root.backend) {
-                root.backend.addCredentials(
-                  root.remoteName.trim(),
-                  "webdav",
-                  {
-                    url: wdUrlField.text.trim(),
-                    user: wdUserField.text.trim(),
-                    pass: wdPassField.text.trim(),
-                    vendor: "other"
-                  },
-                  root.mountImmediate
-                )
-              }
+        Button {
+          Layout.fillWidth: true
+          implicitHeight: Style.space(38)
+          text: (root.backend && root.backend.authBusy) ? "Connecting…" : "Connect & Mount WebDAV"
+          iconText: "󰒋"
+          fontFamily: root.fontFamily
+          fontBold: true
+          foreground: root.foreground
+          bordered: true
+          onClicked: {
+            if (root.backend) {
+              root.backend.addCredentials(
+                root.remoteName.trim(),
+                "webdav",
+                {
+                  url: wdUrlField.text.trim(),
+                  user: wdUserField.text.trim(),
+                  pass: wdPassField.text.trim(),
+                  vendor: "other"
+                },
+                root.mountPath.trim(),
+                root.mountImmediate
+              )
             }
           }
         }
       }
 
-      // ----------------------------------------------------------------------
-      // D. Amazon S3 / MinIO / R2
-      // ----------------------------------------------------------------------
-      BorderSurface {
+      // D. Amazon S3 / MinIO
+      ColumnLayout {
         visible: root.selectedProvider && root.selectedProvider.id === "s3"
         Layout.fillWidth: true
-        implicitHeight: s3SecCol.implicitHeight + Style.space(24)
-        radius: Style.cornerRadius
-        color: Qt.rgba(1, 1, 1, 0.03)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        spacing: Style.space(8)
+
+        RowLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(4)
+          Repeater {
+            model: ["AWS", "Minio", "Cloudflare", "Other"]
+            Button {
+              text: modelData === "Minio" ? "MinIO" : (modelData === "Cloudflare" ? "R2" : modelData)
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              selected: root.s3Preset === modelData
+              foreground: root.foreground
+              bordered: true
+              onClicked: {
+                root.s3Preset = modelData
+                if (modelData === "Minio" && s3EndpointField.text === "") s3EndpointField.text = "http://127.0.0.1:9000"
+                else if (modelData === "Cloudflare" && s3EndpointField.text === "") s3EndpointField.text = "https://<accountid>.r2.cloudflarestorage.com"
+              }
+            }
+          }
+        }
 
         ColumnLayout {
-          id: s3SecCol
-          anchors {
-            fill: parent
-            margins: Style.space(14)
-          }
-          spacing: Style.space(12)
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+          Text { text: "Endpoint URL (optional):"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; color: root.foreground }
+          TextField { id: s3EndpointField; Layout.fillWidth: true; placeholderText: root.s3Preset === "AWS" ? "Default AWS" : "https://minio.lan:9000" }
+        }
 
-          Text {
-            text: "S3 Compatible Object Storage"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            color: root.foreground
-          }
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+          Text { text: "Access Key ID:"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true; color: root.foreground }
+          TextField { id: s3AccessKeyField; Layout.fillWidth: true; placeholderText: "Access Key" }
+        }
 
-          // Provider Preset Buttons
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(6)
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+          Text { text: "Secret Access Key:"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true; color: root.foreground }
+          TextField { id: s3SecretKeyField; Layout.fillWidth: true; placeholderText: "Secret Key"; password: !root.showPassword }
+        }
 
-            Repeater {
-              model: ["AWS", "Minio", "Cloudflare", "Wasabi", "Other"]
-
-              Button {
-                text: modelData === "Cloudflare" ? "Cloudflare R2" : (modelData === "Minio" ? "MinIO" : modelData)
-                fontFamily: root.fontFamily
-                fontSize: Style.font.caption
-                selected: root.s3Preset === modelData
-                foreground: root.foreground
-                bordered: true
-                onClicked: {
-                  root.s3Preset = modelData
-                  if (modelData === "Minio" && s3EndpointField.text === "") {
-                    s3EndpointField.text = "http://127.0.0.1:9000"
-                  } else if (modelData === "Cloudflare" && s3EndpointField.text === "") {
-                    s3EndpointField.text = "https://<accountid>.r2.cloudflarestorage.com"
-                  }
-                }
-              }
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Endpoint URL:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: s3EndpointField
-              Layout.fillWidth: true
-              placeholderText: root.s3Preset === "AWS" ? "Default (AWS endpoints)" : "https://endpoint.example.com"
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Access Key ID:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: s3AccessKeyField
-              Layout.fillWidth: true
-              placeholderText: "AKIA..."
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Secret Access Key:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: s3SecretKeyField
-              Layout.fillWidth: true
-              placeholderText: "Secret Key"
-              password: !root.showPassword
-            }
-
-            PanelActionButton {
-              iconText: root.showPassword ? "󰈈" : "󰈉"
-              tooltipText: root.showPassword ? "Hide secret" : "Show secret"
-              foreground: root.foreground
-              onClicked: { root.showPassword = !root.showPassword }
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Region:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: s3RegionField
-              Layout.fillWidth: true
-              placeholderText: "auto, us-east-1, eu-central-1"
-            }
-          }
-
-          Button {
-            Layout.fillWidth: true
-            implicitHeight: Style.space(42)
-            text: (root.backend && root.backend.authBusy) ? "Verifying & Connecting…" : "Connect & Mount S3 Storage"
-            iconText: "󰋊"
-            fontFamily: root.fontFamily
-            fontBold: true
-            foreground: root.foreground
-            bordered: true
-            onClicked: {
-              if (!root.remoteName || root.remoteName.trim() === "") root.suggestName(root.selectedProvider)
-              if (root.backend) {
-                root.backend.addCredentials(
-                  root.remoteName.trim(),
-                  "s3",
-                  {
-                    provider: root.s3Preset,
-                    endpoint: s3EndpointField.text.trim(),
-                    access_key_id: s3AccessKeyField.text.trim(),
-                    secret_access_key: s3SecretKeyField.text.trim(),
-                    region: s3RegionField.text.trim()
-                  },
-                  root.mountImmediate
-                )
-              }
+        Button {
+          Layout.fillWidth: true
+          implicitHeight: Style.space(38)
+          text: (root.backend && root.backend.authBusy) ? "Connecting…" : "Connect & Mount S3 Storage"
+          iconText: "󰋊"
+          fontFamily: root.fontFamily
+          fontBold: true
+          foreground: root.foreground
+          bordered: true
+          onClicked: {
+            if (root.backend) {
+              root.backend.addCredentials(
+                root.remoteName.trim(),
+                "s3",
+                {
+                  provider: root.s3Preset,
+                  endpoint: s3EndpointField.text.trim(),
+                  access_key_id: s3AccessKeyField.text.trim(),
+                  secret_access_key: s3SecretKeyField.text.trim()
+                },
+                root.mountPath.trim(),
+                root.mountImmediate
+              )
             }
           }
         }
       }
 
-      // ----------------------------------------------------------------------
       // E. Proton Drive
-      // ----------------------------------------------------------------------
-      BorderSurface {
+      ColumnLayout {
         visible: root.selectedProvider && root.selectedProvider.id === "protondrive"
         Layout.fillWidth: true
-        implicitHeight: protonSecCol.implicitHeight + Style.space(24)
-        radius: Style.cornerRadius
-        color: Qt.rgba(1, 1, 1, 0.03)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        spacing: Style.space(8)
 
         ColumnLayout {
-          id: protonSecCol
-          anchors {
-            fill: parent
-            margins: Style.space(14)
-          }
-          spacing: Style.space(12)
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+          Text { text: "Proton Email:"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true; color: root.foreground }
+          TextField { id: protonUserField; Layout.fillWidth: true; placeholderText: "user@proton.me" }
+        }
 
-          Text {
-            text: "Proton Drive Account Login"
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            color: root.foreground
-          }
+        ColumnLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(2)
+          Text { text: "Password:"; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true; color: root.foreground }
+          TextField { id: protonPassField; Layout.fillWidth: true; placeholderText: "Account Password"; password: !root.showPassword }
+        }
 
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Proton Email:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: protonUserField
-              Layout.fillWidth: true
-              placeholderText: "user@proton.me"
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "Password:"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: protonPassField
-              Layout.fillWidth: true
-              placeholderText: "Proton Account Password"
-              password: !root.showPassword
-            }
-
-            PanelActionButton {
-              iconText: root.showPassword ? "󰈈" : "󰈉"
-              tooltipText: root.showPassword ? "Hide password" : "Show password"
-              foreground: root.foreground
-              onClicked: { root.showPassword = !root.showPassword }
-            }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(12)
-
-            Text {
-              text: "2FA Code (optional):"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              color: root.foreground
-              Layout.preferredWidth: Style.space(140)
-            }
-
-            TextField {
-              id: proton2faField
-              Layout.fillWidth: true
-              placeholderText: "6-digit Authenticator code"
-            }
-          }
-
-          Button {
-            Layout.fillWidth: true
-            implicitHeight: Style.space(42)
-            text: (root.backend && root.backend.authBusy) ? "Verifying & Connecting…" : "Connect & Mount Proton Drive"
-            iconText: "󰅟"
-            fontFamily: root.fontFamily
-            fontBold: true
-            foreground: root.foreground
-            bordered: true
-            onClicked: {
-              if (!root.remoteName || root.remoteName.trim() === "") root.suggestName(root.selectedProvider)
-              if (root.backend) {
-                root.backend.addCredentials(
-                  root.remoteName.trim(),
-                  "protondrive",
-                  {
-                    username: protonUserField.text.trim(),
-                    password: protonPassField.text.trim(),
-                    "2fa": proton2faField.text.trim()
-                  },
-                  root.mountImmediate
-                )
-              }
+        Button {
+          Layout.fillWidth: true
+          implicitHeight: Style.space(38)
+          text: (root.backend && root.backend.authBusy) ? "Connecting…" : "Connect & Mount Proton Drive"
+          iconText: "󰅟"
+          fontFamily: root.fontFamily
+          fontBold: true
+          foreground: root.foreground
+          bordered: true
+          onClicked: {
+            if (root.backend) {
+              root.backend.addCredentials(
+                root.remoteName.trim(),
+                "protondrive",
+                {
+                  username: protonUserField.text.trim(),
+                  password: protonPassField.text.trim()
+                },
+                root.mountPath.trim(),
+                root.mountImmediate
+              )
             }
           }
         }

@@ -134,7 +134,7 @@ Item {
     ])
   }
 
-  function addOAuth(remoteName, providerId, clientId, clientSecret, mountAfter) {
+  function addOAuth(remoteName, providerId, clientId, clientSecret, mountPath, mountAfter) {
     if (authBusy) return
     authBusy = true
     authWaiting = true
@@ -150,6 +150,10 @@ Item {
     if (clientSecret && clientSecret !== "") {
       args.push("--client-secret")
       args.push(clientSecret)
+    }
+    if (mountPath && mountPath !== "") {
+      args.push("--mount-path")
+      args.push(mountPath)
     }
     if (mountAfter) {
       args.push("--mount")
@@ -167,7 +171,7 @@ Item {
     authError = "Authorization cancelled."
   }
 
-  function addCredentials(remoteName, providerId, optionsDict, mountAfter) {
+  function addCredentials(remoteName, providerId, optionsDict, mountPath, mountAfter) {
     if (authBusy) return
     authBusy = true
     authWaiting = false
@@ -176,11 +180,27 @@ Item {
     authSuccessMessage = ""
 
     var args = [odriveCli, "add-credentials", remoteName, providerId, "--options", JSON.stringify(optionsDict)]
+    if (mountPath && mountPath !== "") {
+      args.push("--mount-path")
+      args.push(mountPath)
+    }
     if (mountAfter) {
       args.push("--mount")
     }
     authProc.command = args
     authProc.running = true
+  }
+
+  function setRemoteMountPath(remoteName, newPath) {
+    if (actionBusy) return
+    lastAction = "Updating location for " + remoteName + "…"
+    runAction([odriveCli, "set-path", remoteName, newPath])
+  }
+
+  function setMountRoot(newRoot) {
+    if (actionBusy) return
+    lastAction = "Updating mount root…"
+    runAction([odriveCli, "set-root", newRoot])
   }
 
   function openFile(filePath) {
@@ -199,23 +219,8 @@ Item {
   property string cacheMaxAge: "24h"
   property bool autoMountAll: true
   property int pollIntervalSec: 30
-
-  // File browser state
-  property string browserRemote: ""
-  property string browserPath: ""
-  property var browserFiles: []
-  property bool browserLoading: false
   property string currentLog: ""
   property bool logLoading: false
-
-  function setBrowserPath(remote, path) {
-    browserRemote = remote
-    browserPath = path || ""
-    browserLoading = true
-    browserFiles = []
-    filesProc.command = [odriveCli, "files", remote, browserPath]
-    filesProc.running = true
-  }
 
   function loadLog(remote) {
     logLoading = true
@@ -245,27 +250,6 @@ Item {
     }
     onExited: {
       root.refreshing = false
-    }
-  }
-
-  Process {
-    id: filesProc
-    command: []
-    running: false
-    stdout: StdioCollector {
-      onStreamFinished: {
-        root.browserLoading = false
-        try {
-          var items = JSON.parse(this.text.trim())
-          if (Array.isArray(items)) root.browserFiles = items
-          else root.browserFiles = []
-        } catch (e) {
-          root.browserFiles = []
-        }
-      }
-    }
-    onExited: {
-      root.browserLoading = false
     }
   }
 

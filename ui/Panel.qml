@@ -13,6 +13,8 @@ Panel {
   ipcTarget: "ttt.odrive"
   manageIpc: false
 
+  property string currentView: "drives" // "drives" | "add" | "settings"
+
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color accent: Color.accent
@@ -46,17 +48,6 @@ Panel {
     return "ODrive: " + service.totalDrives + " drives configured (none mounted)"
   }
 
-  function openAppWindow(payload) {
-    root.close()
-    var target = payload || {}
-    if (bar && bar.shell && typeof bar.shell.summon === "function") {
-      bar.shell.summon("ttt.odrive", JSON.stringify(target))
-      return
-    }
-    Quickshell.execDetached(["omarchy-shell", "shell", "summon", "ttt.odrive", JSON.stringify(target)])
-  }
-
-  // Derive size from content
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -80,6 +71,10 @@ Panel {
     function refresh(): string { service.refresh(); return "ok" }
     function mountAll(): string { service.mountAll(); return "ok" }
     function unmountAll(): string { service.unmountAll(); return "ok" }
+    function add(): void {
+      root.open()
+      root.currentView = "add"
+    }
     function status(): string {
       return JSON.stringify({
         installed: service.installed,
@@ -155,7 +150,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(420))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(580))
+    contentHeight: panel.fittedContentHeight(mainContentCol.implicitHeight, Style.space(580))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -168,163 +163,371 @@ Panel {
           if (service.allMounted) service.unmountAll()
           else service.mountAll()
         }
-        else if (t === "a" || t === "A") root.openAppWindow({ view: "add" })
+        else if (t === "a" || t === "A") {
+          root.currentView = root.currentView === "add" ? "drives" : "add"
+        }
+        else if (t === "s" || t === "S") {
+          root.currentView = root.currentView === "settings" ? "drives" : "settings"
+        }
         else if (t === "o" || t === "O") service.openFolder("")
-        else if (t === "w" || t === "W") root.openAppWindow({})
       }
 
       Flickable {
         id: panelFlick
         anchors.fill: parent
         contentWidth: width
-        contentHeight: column.implicitHeight
+        contentHeight: mainContentCol.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
         Column {
-          id: column
+          id: mainContentCol
           width: panelFlick.width
           spacing: Style.space(10)
 
-          // Hero Header
-          PanelHero {
-            id: hero
-            width: parent.width
-            title: "Cloud Drives"
-            meta: root.heroMeta
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            iconComponent: Component {
-              CloudIcon {
-                iconSize: Style.font.display
-                color: root.hasMounted ? Color.accent : root.foreground
-                active: root.hasMounted
-                busy: service.actionBusy || service.refreshing
-              }
-            }
-
-            trailingControl: Component {
-              ToggleSwitch {
-                visible: root.hasDrives
-                checked: service.allMounted
-                busy: service.actionBusy
-                foreground: hero.foreground
-                onToggled: {
-                  if (service.allMounted) service.unmountAll()
-                  else service.mountAll()
-                }
-
-                PanelToolTip {
-                  visible: containsMouse
-                  text: service.allMounted ? "Unmount all drives" : "Mount all drives"
-                  fontFamily: hero.fontFamily
-                }
-              }
-            }
-          }
-
-          // Action Status / Error banner
-          Text {
-            visible: service.lastAction !== "" || service.lastError !== ""
-            width: parent.width
-            textFormat: Text.PlainText
-            text: service.lastAction !== "" ? service.lastAction : service.lastError
-            color: service.lastError !== "" && service.lastAction === "" ? root.urgent : root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
-
-          // Toolbar Buttons
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-
-            Button {
-              iconText: "󰐕"
-              text: "Add Drive"
-              fontFamily: root.fontFamily
-              foreground: root.foreground
-              bordered: true
-              onClicked: service.launchSetup("")
-            }
-
-            Button {
-              iconText: "󰉋"
-              text: "Cloud Folder"
-              fontFamily: root.fontFamily
-              foreground: root.foreground
-              bordered: true
-              onClicked: service.openFolder("")
-            }
-
-            Button {
-              iconText: "󰌹"
-              text: "Open App"
-              fontFamily: root.fontFamily
-              foreground: root.foreground
-              bordered: true
-              onClicked: root.openAppWindow({})
-            }
-
-            Item { Layout.fillWidth: true }
-
-            PanelActionButton {
-              iconText: "󰑐"
-              tooltipText: "Refresh status & quotas (R)"
-              foreground: root.foreground
-              hoverColor: Color.accent
-              onClicked: service.refresh()
-            }
-          }
-
-          // Section Header for Configured Drives
-          PanelSectionHeader {
-            visible: root.hasDrives
-            text: "Configured Drives"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-          }
-
-          // List of Configured Drives
+          // ==================================================================
+          // VIEW 1: DRIVES (DEFAULT MAIN VIEW)
+          // ==================================================================
           Column {
+            visible: root.currentView === "drives"
             width: parent.width
-            spacing: Style.space(6)
-            visible: root.hasDrives
+            spacing: Style.space(10)
 
-            Repeater {
-              model: service.drives
+            // Hero Header
+            PanelHero {
+              id: hero
+              width: parent.width
+              title: "Cloud Drives"
+              meta: root.heroMeta
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              iconComponent: Component {
+                CloudIcon {
+                  iconSize: Style.font.display
+                  color: root.hasMounted ? Color.accent : root.foreground
+                  active: root.hasMounted
+                  busy: service.actionBusy || service.refreshing
+                }
+              }
 
-              DriveRow {
-                width: parent.width
-                drive: modelData
-                foreground: root.foreground
+              trailingControl: Component {
+                ToggleSwitch {
+                  visible: root.hasDrives
+                  checked: service.allMounted
+                  busy: service.actionBusy
+                  foreground: hero.foreground
+                  onToggled: {
+                    if (service.allMounted) service.unmountAll()
+                    else service.mountAll()
+                  }
+
+                  PanelToolTip {
+                    visible: containsMouse
+                    text: service.allMounted ? "Unmount all drives" : "Mount all drives"
+                    fontFamily: hero.fontFamily
+                  }
+                }
+              }
+            }
+
+            // Action Status / Error banner
+            Text {
+              visible: service.lastAction !== "" || service.lastError !== ""
+              width: parent.width
+              textFormat: Text.PlainText
+              text: service.lastAction !== "" ? service.lastAction : service.lastError
+              color: service.lastError !== "" && service.lastAction === "" ? root.urgent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            // Toolbar Buttons
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Button {
+                iconText: "󰐕"
+                text: "Add Drive"
                 fontFamily: root.fontFamily
-                onToggleMount: service.toggleMount(modelData.name, modelData.mounted)
-                onOpenFolder: service.openFolder(modelData.name)
+                fontSize: Style.font.caption
+                foreground: root.foreground
+                bordered: true
+                onClicked: { root.currentView = "add" }
+              }
+
+              Button {
+                iconText: "󰉋"
+                text: "Folder"
+                tooltipText: "Open mount directory (" + service.mountRoot + ")"
+                fontFamily: root.fontFamily
+                fontSize: Style.font.caption
+                foreground: root.foreground
+                bordered: true
+                onClicked: service.openFolder("")
+              }
+
+              Button {
+                iconText: "󰒓"
+                text: "Settings"
+                fontFamily: root.fontFamily
+                fontSize: Style.font.caption
+                foreground: root.foreground
+                bordered: true
+                onClicked: { root.currentView = "settings" }
+              }
+
+              Item { Layout.fillWidth: true }
+
+              PanelActionButton {
+                iconText: "󰑐"
+                tooltipText: "Refresh status & quotas (R)"
+                foreground: root.foreground
+                hoverColor: Color.accent
+                onClicked: service.refresh()
+              }
+            }
+
+            // Section Header for Configured Drives
+            PanelSectionHeader {
+              visible: root.hasDrives
+              text: "Configured Drives"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            // List of Configured Drives
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+              visible: root.hasDrives
+
+              Repeater {
+                model: service.drives
+
+                DriveRow {
+                  width: parent.width
+                  drive: modelData
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onToggleMount: service.toggleMount(modelData.name, modelData.mounted)
+                  onOpenFolder: service.openFolder(modelData.name)
+                  onUpdateMountPath: function(newPath) {
+                    service.setRemoteMountPath(modelData.name, newPath)
+                  }
+                  onRemoveDrive: service.removeRemote(modelData.name)
+                }
+              }
+            }
+
+            // Empty State if no drives configured
+            EmptyState {
+              visible: !root.hasDrives
+              width: parent.width
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onAddProvider: function(provId) {
+                root.currentView = "add"
+                addForm.selectProvider(provId)
+              }
+            }
+
+            // Recent Files
+            RecentFiles {
+              visible: service.recentFiles.length > 0
+              width: parent.width
+              files: service.recentFiles
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onFileSelected: function(path) { service.openFile(path) }
+            }
+          }
+
+          // ==================================================================
+          // VIEW 2: ADD ACCOUNT (IN-WIDGET GUI SETUP)
+          // ==================================================================
+          Column {
+            visible: root.currentView === "add"
+            width: parent.width
+
+            AddAccountForm {
+              id: addForm
+              width: parent.width
+              backend: service
+              foreground: root.foreground
+              background: root.background
+              accent: root.accent
+              urgent: root.urgent
+              dim: root.dim
+              fontFamily: root.fontFamily
+              onAccountAdded: function(name) {
+                root.currentView = "drives"
+                service.refresh()
+              }
+              onCancelled: {
+                root.currentView = "drives"
               }
             }
           }
 
-          // Empty State if no drives configured
-          EmptyState {
-            visible: !root.hasDrives
+          // ==================================================================
+          // VIEW 3: SETTINGS (MOUNT ROOT & CONFIGURATION)
+          // ==================================================================
+          Column {
+            visible: root.currentView === "settings"
             width: parent.width
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onAddProvider: function(provId) { root.openAppWindow({ view: "add", provider: provId || "" }) }
-          }
+            spacing: Style.space(12)
 
-          // Recent Files
-          RecentFiles {
-            width: parent.width
-            files: service.recentFiles
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onFileSelected: function(path) { service.openFile(path) }
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Button {
+                iconText: "󰁝"
+                text: "Back to Drives"
+                fontFamily: root.fontFamily
+                fontSize: Style.font.caption
+                foreground: root.foreground
+                bordered: true
+                onClicked: { root.currentView = "drives" }
+              }
+
+              Text {
+                Layout.fillWidth: true
+                text: "ODrive Settings"
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                color: root.foreground
+              }
+            }
+
+            BorderSurface {
+              width: parent.width
+              implicitHeight: cfgCol.implicitHeight + Style.space(20)
+              radius: Style.cornerRadius
+              color: Qt.rgba(1, 1, 1, 0.03)
+              borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+
+              ColumnLayout {
+                id: cfgCol
+                anchors {
+                  fill: parent
+                  margins: Style.space(12)
+                }
+                spacing: Style.space(12)
+
+                // Global Mount Root Setting
+                ColumnLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.space(4)
+
+                  Text {
+                    text: "Default Cloud Mount Root:"
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    color: root.foreground
+                  }
+
+                  RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Style.space(6)
+
+                    TextField {
+                      id: rootDirInput
+                      Layout.fillWidth: true
+                      text: service.mountRoot
+                      placeholderText: "~/Cloud"
+                    }
+
+                    Button {
+                      text: "Save"
+                      iconText: "󰄬"
+                      fontFamily: root.fontFamily
+                      fontSize: Style.font.caption
+                      foreground: root.foreground
+                      bordered: true
+                      onClicked: {
+                        service.setMountRoot(rootDirInput.text.trim())
+                      }
+                    }
+                  }
+
+                  Text {
+                    text: "Directory where new cloud drives are attached by default"
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption - Style.space(2)
+                    color: root.dim
+                  }
+                }
+
+                // Auto-mount switch
+                RowLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.space(8)
+
+                  Column {
+                    Layout.fillWidth: true
+                    spacing: 0
+
+                    Text {
+                      text: "Auto-mount all drives on login"
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                      color: root.foreground
+                    }
+
+                    Text {
+                      text: "Automatically mount all drives when Omarchy shell boots"
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption - Style.space(2)
+                      color: root.dim
+                    }
+                  }
+
+                  ToggleSwitch {
+                    checked: service.autoMountAll
+                    foreground: root.foreground
+                    onToggled: service.updateConfig("auto_mount_all", !service.autoMountAll)
+                  }
+                }
+
+                // Cache & Engine Info
+                ColumnLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.space(3)
+
+                  Text {
+                    text: "Engine & Cache Configuration"
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    color: root.foreground
+                  }
+
+                  Text {
+                    text: "VFS Cache: " + service.vfsCacheMode.toUpperCase() + " (" + service.cacheMaxSizeGb + " GB limit, " + service.cacheMaxAge + " expiry)"
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption - Style.space(2)
+                    color: root.dim
+                  }
+
+                  Text {
+                    text: "Status: " + (service.installed ? (service.version || "rclone ready") : "rclone missing")
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption - Style.space(2)
+                    color: service.installed ? Color.accent : root.urgent
+                  }
+                }
+              }
+            }
           }
         }
       }

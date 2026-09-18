@@ -11,23 +11,21 @@ ODrive is a native Omarchy desktop plugin and CLI tool that brings all your clou
 ## ✨ Features
 
 - **Multi-Cloud Integration**: Native support for **Google Drive**, **Microsoft OneDrive**, **Dropbox**, **Nextcloud / ownCloud**, **Box**, **pCloud**, **Proton Drive**, **WebDAV**, **Amazon S3 / MinIO / R2**, and any custom rclone remote.
-- **Full Desktop Application (`FloatingWindow`)**:
-  - Wayland floating application window tiled or managed seamlessly by Hyprland.
-  - **Drives View**: High-level storage metrics, drive health, quota gauges, and one-click mount switches.
-  - **Built-in Cloud File Browser**: Browse and navigate cloud folders directly inside the app with breadcrumb path navigation.
-  - **Account Connection Wizard**: Visual provider cards for Google Drive, OneDrive, Dropbox, Nextcloud, Box, pCloud, Proton Drive, S3, and WebDAV.
-  - **Activity & Diagnostics**: Real-time mount process tracker and live log viewer.
-  - **Preferences & Settings**: Configurable mount point root (`~/Cloud`), VFS cache modes (`full`, `writes`), cache quotas, and login auto-mounts.
-- **Omarchy Bar Widget**:
-  - Lightweight cloud status glyph in the Omarchy bar with mounted count badge.
+- **Pure Omarchy Bar Widget**:
+  - Compact cloud glyph in the Omarchy bar with real-time mounted drive count badge.
   - Color-coded activity indicators (idle, active mount, syncing, error).
   - Rich tooltip with mount status and drive names.
-  - Left-click to open the quick popout panel with an instant "Open App" button.
-  - Right-click to quick toggle Mount/Unmount All, middle-click to refresh.
+  - Left-click toggles the full-featured popout panel directly beneath your bar.
+  - Right-click quick-toggles Mount All / Unmount All; middle-click refreshes status.
+- **Complete In-Panel Management (No Separate App Window Needed)**:
+  - **Drive Cards**: Drive status, storage quota gauges, one-click mount/unmount toggle, and file manager launcher (`xdg-open`).
+  - **Custom Mount Paths**: Change the mount directory per drive inline (`󰏫` button) or set a global default mount root (`~/Cloud`).
+  - **In-Panel GUI Account Setup**: Add new cloud remotes directly through the widget without opening a terminal window. Supports browser-based OAuth for Google Drive, OneDrive, Dropbox, Box, pCloud, and direct credentials for Nextcloud, WebDAV, S3, and Proton Drive.
+  - **Settings View**: Toggle auto-mount on login and configure root paths directly from the widget.
 - **Robust CLI & Automation**:
-  - Full-featured `odrive` command line utility (`odrive status`, `odrive files`, `odrive mount`, `odrive app`).
+  - Full-featured `odrive` command line utility (`odrive status`, `odrive mount`, `odrive set-path`, `odrive add-oauth`, `odrive gui`).
   - Systemd user service for auto-mounting drives on login.
-  - Seamless IPC summoning via `omarchy-shell shell summon ttt.odrive`.
+  - Seamless IPC summoning via `odrive gui` or `omarchy-shell shell summon ttt.odrive`.
 
 ---
 
@@ -68,13 +66,14 @@ To remove:
 
 ## ☁️ Adding Cloud Accounts
 
-### Via the Desktop Panel
-1. Click the **Cloud icon** in the Omarchy bar (or press your shortcut).
-2. Click **"+ Add Drive"** (or press `a`).
-3. A floating terminal will open with the guided provider wizard.
-4. Select your provider (**Google Drive**, **OneDrive**, **Dropbox**, etc.).
-5. Complete the browser authentication prompt.
-6. The drive will immediately appear in your panel and can be mounted with one click!
+### Via the Bar Widget GUI (No Terminal Needed!)
+1. Click the **Cloud icon** in the Omarchy bar (or press your widget shortcut).
+2. Click **"+ Add Drive"** in the toolbar (or press `a`).
+3. Select your provider (**Google Drive**, **OneDrive**, **Dropbox**, **Nextcloud**, etc.).
+4. Enter a name for the drive and optionally customize its mount path.
+5. For Google Drive / OneDrive / Dropbox: click **"Authenticate with Browser"** — your default browser will open to complete standard OAuth approval.
+6. For Nextcloud / WebDAV / S3: enter your server URL and credentials directly in the form and click **"Connect & Mount"**.
+7. Once confirmed, the drive is configured and immediately available!
 
 ### Via the Command Line
 ```bash
@@ -90,18 +89,19 @@ odrive setup HomeCloud nextcloud # Nextcloud
 
 ---
 
-## 🖥️ Desktop Panel Shortcuts
+## 🖥️ Widget Panel Shortcuts
 
 When the ODrive panel is focused:
 
 | Key | Action |
 |-----|--------|
+| `a` / `A` | Toggle Add Drive view |
+| `s` / `S` | Toggle Settings view |
 | `m` / `M` | Toggle Mount All / Unmount All |
 | `r` / `R` | Refresh drive status and quotas |
-| `a` / `A` | Add new cloud drive (opens setup wizard) |
 | `o` / `O` | Open root cloud directory (`~/Cloud`) |
 | `Tab` | Switch to adjacent bar panel |
-| `Escape` | Close panel |
+| `Escape` | Back to Drives list / Close panel |
 
 ---
 
@@ -181,7 +181,7 @@ systemctl --user enable --now odrive-automount.service
 
 ```
 ODrive/
-├── manifest.json            # Omarchy plugin manifest (schemaVersion 1)
+├── manifest.json            # Omarchy plugin manifest (bar-widget)
 ├── install.sh               # Installation & lifecycle manager
 ├── README.md                # Documentation
 ├── LICENSE                  # MIT License
@@ -190,14 +190,15 @@ ODrive/
 ├── lib/
 │   └── odrive/
 │       ├── __init__.py
-│       ├── cli.py           # CLI commands & interactive setup wizard
-│       ├── config.py        # Settings management & legacy migration
+│       ├── cli.py           # CLI commands & subcommands
+│       ├── config.py        # Settings management & custom mount paths
 │       ├── manager.py       # Core rclone, mount, unmount & quota engine
 │       └── providers.py     # Supported cloud providers & metadata
 ├── ui/
-│   ├── Panel.qml            # Main bar widget and popout panel
+│   ├── Panel.qml            # Main bar widget popout panel & multi-view manager
 │   ├── Service.qml          # Background coordinator & Quickshell process runner
-│   ├── DriveRow.qml         # Individual drive row with quota progress bar
+│   ├── DriveRow.qml         # Drive card with inline mount path editor
+│   ├── AddAccountForm.qml   # Responsive in-panel account creation wizard
 │   ├── EmptyState.qml       # Onboarding screen with quick-connect buttons
 │   ├── RecentFiles.qml      # Recent cloud files list
 │   ├── CloudIcon.qml        # Dynamic cloud glyph component
@@ -205,7 +206,7 @@ ODrive/
 │   └── qmldir               # QML component registrations
 ├── assets/
 │   ├── icon.svg             # Application vector icon
-│   └── odrive.desktop       # Desktop application entry
+│   └── odrive.desktop       # Desktop entry (summons bar widget)
 └── systemd/
     └── odrive-automount.service # User systemd service template
 ```

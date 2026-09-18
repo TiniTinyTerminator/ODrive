@@ -104,7 +104,7 @@ def get_mount_path_for_remote(remote_name: str) -> Path:
     cfg = load_config()
     remotes = cfg.get("remotes", {})
     remote_cfg = remotes.get(remote_name, {})
-    custom = remote_cfg.get("custom_mount_path")
+    custom = remote_cfg.get("mount_path") or remote_cfg.get("custom_mount_path")
     if custom:
         return Path(os.path.expanduser(custom)).resolve()
     return get_mount_root() / remote_name

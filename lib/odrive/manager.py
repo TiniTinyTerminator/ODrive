@@ -392,12 +392,53 @@ class DriveManager:
         except OSError as e:
             return False, str(e)
 
+    def set_remote_mount_path(self, remote_name: str, new_path: str) -> Tuple[bool, str]:
+        """Change the mount location of a specific remote and remount if needed."""
+        is_mounted, old_path = self.is_remote_mounted(remote_name)
+        if is_mounted:
+            self.unmount(remote_name)
+
+        cfg = load_config()
+        if "remotes" not in cfg:
+            cfg["remotes"] = {}
+        if remote_name not in cfg["remotes"]:
+            cfg["remotes"][remote_name] = {}
+
+        clean_path = new_path.strip()
+        if clean_path:
+            cfg["remotes"][remote_name]["mount_path"] = clean_path
+            cfg["remotes"][remote_name]["custom_mount_path"] = clean_path
+        else:
+            cfg["remotes"][remote_name].pop("mount_path", None)
+            cfg["remotes"][remote_name].pop("custom_mount_path", None)
+
+        save_config(cfg)
+
+        target_path = str(get_mount_path_for_remote(remote_name))
+        if is_mounted:
+            ok, msg = self.mount(remote_name)
+            if ok:
+                return True, f"Remounted {remote_name} at {target_path}"
+            return False, f"Updated location but remount failed: {msg}"
+        return True, f"Updated mount location to {target_path}"
+
+    def set_mount_root(self, new_root: str) -> Tuple[bool, str]:
+        """Change default mount root for all remotes."""
+        clean_root = new_root.strip()
+        if not clean_root:
+            return False, "Mount root cannot be empty"
+        cfg = load_config()
+        cfg["mount_root"] = clean_root
+        save_config(cfg)
+        return True, f"Default mount root set to {clean_root}"
+
     def add_remote_oauth(
         self,
         remote_name: str,
         provider_id: str,
         client_id: str = "",
         client_secret: str = "",
+        mount_path: str = "",
         timeout_sec: int = 180,
     ) -> Tuple[bool, str]:
         """Run non-interactive browser OAuth flow for a cloud provider."""
@@ -475,6 +516,15 @@ class DriveManager:
                 err = create_res.stderr.strip() or create_res.stdout.strip()
                 return False, f"Failed to save remote configuration: {err}"
 
+            if mount_path:
+                cfg = load_config()
+                if "remotes" not in cfg:
+                    cfg["remotes"] = {}
+                if clean_name not in cfg["remotes"]:
+                    cfg["remotes"][clean_name] = {}
+                cfg["remotes"][clean_name]["mount_path"] = mount_path.strip()
+                save_config(cfg)
+
             # Trigger omarchy shell plugin rescan
             try:
                 subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], capture_output=True, timeout=2)
@@ -490,6 +540,7 @@ class DriveManager:
         remote_name: str,
         provider_id: str,
         options: dict,
+        mount_path: str = "",
         test_connection: bool = True,
     ) -> Tuple[bool, str]:
         """Configure credentials-based remote (Nextcloud, WebDAV, S3, Proton Drive) without terminal."""
@@ -594,6 +645,15 @@ class DriveManager:
                     # Clean up failed remote
                     self.remove_remote(clean_name)
                     return False, f"Connection failed: {test_err}"
+
+            if mount_path:
+                cfg = load_config()
+                if "remotes" not in cfg:
+                    cfg["remotes"] = {}
+                if clean_name not in cfg["remotes"]:
+                    cfg["remotes"][clean_name] = {}
+                cfg["remotes"][clean_name]["mount_path"] = mount_path.strip()
+                save_config(cfg)
 
             try:
                 subprocess.run(["omarchy-shell", "shell", "rescanPlugins"], capture_output=True, timeout=2)

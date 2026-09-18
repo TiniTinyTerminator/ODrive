@@ -282,6 +282,7 @@ def main():
     p_oauth.add_argument("provider", help="Provider ID (drive, onedrive, dropbox, box, pcloud)")
     p_oauth.add_argument("--client-id", default="", help="Custom OAuth Client ID")
     p_oauth.add_argument("--client-secret", default="", help="Custom OAuth Client Secret")
+    p_oauth.add_argument("--mount-path", default="", help="Custom mount directory path")
     p_oauth.add_argument("--mount", action="store_true", help="Mount immediately after configuration")
 
     # add-credentials
@@ -289,16 +290,26 @@ def main():
     p_cred.add_argument("remote", help="Remote name")
     p_cred.add_argument("provider", help="Provider ID (nextcloud, webdav, s3, protondrive)")
     p_cred.add_argument("--options", default="{}", help="JSON string with options (url, user, pass, etc.)")
+    p_cred.add_argument("--mount-path", default="", help="Custom mount directory path")
     p_cred.add_argument("--no-test", action="store_true", help="Skip connection testing")
     p_cred.add_argument("--mount", action="store_true", help="Mount immediately after configuration")
+
+    # set-path
+    p_set_path = subparsers.add_parser("set-path", help="Change mount directory for a remote")
+    p_set_path.add_argument("remote", help="Remote name")
+    p_set_path.add_argument("path", help="New mount directory path (e.g. ~/Cloud/MyFolder)")
+
+    # set-root
+    p_set_root = subparsers.add_parser("set-root", help="Change default mount root for all remotes")
+    p_set_root.add_argument("path", help="New default mount root directory (e.g. ~/Cloud)")
 
     # test-remote
     p_test = subparsers.add_parser("test-remote", help="Test connection to a remote")
     p_test.add_argument("remote", help="Remote name")
 
     # gui / summon
-    subparsers.add_parser("gui", help="Open the ODrive desktop app")
-    subparsers.add_parser("app", help="Open the ODrive desktop app")
+    subparsers.add_parser("gui", help="Open the ODrive bar widget panel")
+    subparsers.add_parser("app", help="Open the ODrive bar widget panel")
 
     args = parser.parse_args()
     manager = DriveManager()
@@ -401,6 +412,7 @@ def main():
             args.provider,
             client_id=args.client_id,
             client_secret=args.client_secret,
+            mount_path=getattr(args, "mount_path", ""),
         )
         if ok:
             remote_name = res
@@ -434,6 +446,7 @@ def main():
             args.remote,
             args.provider,
             options=options,
+            mount_path=getattr(args, "mount_path", ""),
             test_connection=not args.no_test,
         )
         if ok:
@@ -457,6 +470,18 @@ def main():
                 "ok": False,
                 "error": res,
             }))
+            sys.exit(1)
+
+    elif args.command == "set-path":
+        ok, msg = manager.set_remote_mount_path(args.remote, args.path)
+        print(json.dumps({"ok": ok, "message": msg, "remote": args.remote}))
+        if not ok:
+            sys.exit(1)
+
+    elif args.command == "set-root":
+        ok, msg = manager.set_mount_root(args.path)
+        print(json.dumps({"ok": ok, "message": msg}))
+        if not ok:
             sys.exit(1)
 
     elif args.command == "test-remote":
