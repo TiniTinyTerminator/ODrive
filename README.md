@@ -37,28 +37,25 @@ ODrive is a native Omarchy desktop plugin and CLI tool that brings all your clou
 
 ### 2. Installation
 
-Clone or download to your machine and run the installer:
+#### Via Omarchy Plugin Manager (Recommended)
+Add and enable directly from git into your Omarchy shell:
 
 ```bash
+omarchy plugin add https://github.com/TiniTinyTerminator/ODrive.git --enable
+```
+
+#### Via Git Checkout
+Clone the repository and run the installer:
+
+```bash
+git clone https://github.com/TiniTinyTerminator/ODrive.git ~/Projects/ODrive
 cd ~/Projects/ODrive
-./install.sh --enable
+./install.sh
 ```
 
-Or using `make`:
-```bash
-make install
-```
-
-#### Installer Options:
-- `./install.sh --enable`: Standard install and activates widget on the Omarchy bar.
-- `./install.sh --enable --systemd`: Installs, enables on bar, and configures login auto-mount service.
-- `./install.sh --section center`: Places widget in a specific bar section (`left`, `center`, `right`).
-- `./install.sh --link --enable`: Symlinks files for live active development.
-- `./install.sh --uninstall`: Cleanly disables the plugin, stops service, and removes installed files while preserving cloud configs.
-
-#### Python Setup & Arch Linux Package:
-- **Python Setup**: `pip install .` or `pipx install .` using `pyproject.toml` / `setup.py`.
-- **Arch / Omarchy Package**: Build with `makepkg -si` using the included `PKGBUILD`.
+- `./install.sh`: Copies plugin files to `~/.config/omarchy/plugins/ttt.odrive`, links CLI to `~/.local/bin/odrive`, and enables the widget on the bar.
+- `./install.sh --link`: Symlinks files directly into Omarchy (for active development).
+- `./install.sh --uninstall`: Cleanly disables the widget and removes installed files while preserving your cloud accounts and configs.
 
 ---
 
@@ -177,12 +174,8 @@ systemctl --user enable --now odrive-automount.service
 ```
 ODrive/
 ├── manifest.json            # Omarchy plugin manifest (bar-widget)
-├── install.sh               # Robust installer with dependency checking & CLI flags
-├── setup.py                 # Standard Python release setup script
-├── pyproject.toml           # PEP 517/518 build configuration & metadata
-├── PKGBUILD                 # Arch Linux / Omarchy package build recipe
-├── Makefile                 # Make targets (install, link, uninstall, validate)
-├── README.md                # Documentation
+├── install.sh               # Native installer script (copy, link, uninstall)
+├── README.md                # Documentation & usage guide
 ├── LICENSE                  # MIT License
 ├── bin/
 │   └── odrive               # CLI executable entry point
