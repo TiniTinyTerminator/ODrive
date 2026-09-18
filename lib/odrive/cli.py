@@ -304,7 +304,7 @@ def main():
     manager = DriveManager()
 
     if args.command == "status" or args.command is None:
-        status = manager.get_status(include_recent=True)
+        status = manager.get_status(include_recent=getattr(args, "json", False))
         if getattr(args, "json", False):
             print(json.dumps(status, indent=2))
         else:

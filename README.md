@@ -44,21 +44,21 @@ cd ~/Projects/ODrive
 ./install.sh --enable
 ```
 
-This will:
-1. Validate the plugin against the Omarchy manifest schema.
-2. Install the plugin into `~/.config/omarchy/plugins/ttt.odrive`.
-3. Symlink the CLI tool to `~/.local/bin/odrive`.
-4. Enable the widget in the right section of your Omarchy bar.
-
-For active development, use symlink mode:
+Or using `make`:
 ```bash
-./install.sh --link --enable
+make install
 ```
 
-To remove:
-```bash
-./install.sh --uninstall
-```
+#### Installer Options:
+- `./install.sh --enable`: Standard install and activates widget on the Omarchy bar.
+- `./install.sh --enable --systemd`: Installs, enables on bar, and configures login auto-mount service.
+- `./install.sh --section center`: Places widget in a specific bar section (`left`, `center`, `right`).
+- `./install.sh --link --enable`: Symlinks files for live active development.
+- `./install.sh --uninstall`: Cleanly disables the plugin, stops service, and removes installed files while preserving cloud configs.
+
+#### Python Setup & Arch Linux Package:
+- **Python Setup**: `pip install .` or `pipx install .` using `pyproject.toml` / `setup.py`.
+- **Arch / Omarchy Package**: Build with `makepkg -si` using the included `PKGBUILD`.
 
 ---
 
@@ -177,22 +177,26 @@ systemctl --user enable --now odrive-automount.service
 ```
 ODrive/
 ├── manifest.json            # Omarchy plugin manifest (bar-widget)
-├── install.sh               # Installation & lifecycle manager
+├── install.sh               # Robust installer with dependency checking & CLI flags
+├── setup.py                 # Standard Python release setup script
+├── pyproject.toml           # PEP 517/518 build configuration & metadata
+├── PKGBUILD                 # Arch Linux / Omarchy package build recipe
+├── Makefile                 # Make targets (install, link, uninstall, validate)
 ├── README.md                # Documentation
 ├── LICENSE                  # MIT License
 ├── bin/
 │   └── odrive               # CLI executable entry point
 ├── lib/
 │   └── odrive/
-│       ├── __init__.py
-│       ├── cli.py           # CLI commands & subcommands
+│       ├── __init__.py      # Package definition & version (1.0.0)
+│       ├── cli.py           # CLI subcommands & table formatting
 │       ├── config.py        # Settings management & custom mount paths
 │       ├── manager.py       # Core rclone, mount, unmount & quota engine
 │       └── providers.py     # Supported cloud providers & metadata
 ├── ui/
 │   ├── Panel.qml            # Main bar widget popout panel & multi-view manager
 │   ├── Service.qml          # Background coordinator & Quickshell process runner
-│   ├── DriveRow.qml         # Drive card with inline mount path editor
+│   ├── DriveRow.qml         # Drive card with inline mount path editor & quota bar
 │   ├── AddAccountForm.qml   # Responsive in-panel account creation wizard
 │   ├── EmptyState.qml       # Onboarding screen with quick-connect buttons
 │   ├── RecentFiles.qml      # Recent cloud files list
