@@ -7,10 +7,13 @@
   "license": "MIT",
   "description": "Unified cloud drive manager for Omarchy — mount, monitor, and manage Google Drive, OneDrive, Dropbox, Nextcloud, and more.",
   "kinds": [
-    "bar-widget"
+    "bar-widget",
+    "overlay"
   ],
+  "keepLoaded": true,
   "entryPoints": {
-    "barWidget": "ui/Panel.qml"
+    "barWidget": "ui/Panel.qml",
+    "overlay": "ui/DriveWindow.qml"
   },
   "barWidget": {
     "displayName": "Cloud Drives",

@@ -46,6 +46,16 @@ Panel {
     return "ODrive: " + service.totalDrives + " drives configured (none mounted)"
   }
 
+  function openAppWindow(payload) {
+    root.close()
+    var target = payload || {}
+    if (bar && bar.shell && typeof bar.shell.summon === "function") {
+      bar.shell.summon("ttt.odrive", JSON.stringify(target))
+      return
+    }
+    Quickshell.execDetached(["omarchy-shell", "shell", "summon", "ttt.odrive", JSON.stringify(target)])
+  }
+
   // Derive size from content
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -160,6 +170,7 @@ Panel {
         }
         else if (t === "a" || t === "A") service.launchSetup("")
         else if (t === "o" || t === "O") service.openFolder("")
+        else if (t === "w" || t === "W") root.openAppWindow({})
       }
 
       Flickable {
@@ -243,11 +254,20 @@ Panel {
 
             Button {
               iconText: "󰉋"
-              text: "Open Cloud Folder"
+              text: "Cloud Folder"
               fontFamily: root.fontFamily
               foreground: root.foreground
               bordered: true
               onClicked: service.openFolder("")
+            }
+
+            Button {
+              iconText: "󰌹"
+              text: "Open App"
+              fontFamily: root.fontFamily
+              foreground: root.foreground
+              bordered: true
+              onClicked: root.openAppWindow({})
             }
 
             Item { Layout.fillWidth: true }

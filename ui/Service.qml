@@ -59,6 +59,11 @@ Item {
     mountedDrives = Number(parsed.mountedDrives || 0)
     allMounted = parsed.allMounted === true
     recentFiles = parsed.recentFiles || []
+    if (parsed.vfsCacheMode) vfsCacheMode = String(parsed.vfsCacheMode)
+    if (parsed.cacheMaxSizeGb !== undefined) cacheMaxSizeGb = Number(parsed.cacheMaxSizeGb)
+    if (parsed.cacheMaxAge) cacheMaxAge = String(parsed.cacheMaxAge)
+    if (parsed.autoMountAll !== undefined) autoMountAll = parsed.autoMountAll === true
+    if (parsed.pollIntervalSec !== undefined) pollIntervalSec = Number(parsed.pollIntervalSec)
     lastError = ""
 
     // Apply drives with pending optimistic overrides cleared if reality caught up
@@ -134,6 +139,46 @@ Item {
     actionProc.running = true
   }
 
+  property string vfsCacheMode: "full"
+  property int cacheMaxSizeGb: 10
+  property string cacheMaxAge: "24h"
+  property bool autoMountAll: true
+  property int pollIntervalSec: 30
+
+  // File browser state
+  property string browserRemote: ""
+  property string browserPath: ""
+  property var browserFiles: []
+  property bool browserLoading: false
+  property string currentLog: ""
+  property bool logLoading: false
+
+  function setBrowserPath(remote, path) {
+    browserRemote = remote
+    browserPath = path || ""
+    browserLoading = true
+    browserFiles = []
+    filesProc.command = [odriveCli, "files", remote, browserPath]
+    filesProc.running = true
+  }
+
+  function loadLog(remote) {
+    logLoading = true
+    currentLog = "Loading log…"
+    logProc.command = [odriveCli, "log", remote]
+    logProc.running = true
+  }
+
+  function removeRemote(remoteName) {
+    if (actionBusy) return
+    lastAction = "Removing " + remoteName + "…"
+    runAction([odriveCli, "remove", remoteName])
+  }
+
+  function updateConfig(key, value) {
+    runAction([odriveCli, "config", key, String(value)])
+  }
+
   Process {
     id: statusProc
     command: [root.odriveCli, "status", "--json"]
@@ -145,6 +190,42 @@ Item {
     }
     onExited: {
       root.refreshing = false
+    }
+  }
+
+  Process {
+    id: filesProc
+    command: []
+    running: false
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.browserLoading = false
+        try {
+          var items = JSON.parse(this.text.trim())
+          if (Array.isArray(items)) root.browserFiles = items
+          else root.browserFiles = []
+        } catch (e) {
+          root.browserFiles = []
+        }
+      }
+    }
+    onExited: {
+      root.browserLoading = false
+    }
+  }
+
+  Process {
+    id: logProc
+    command: []
+    running: false
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.logLoading = false
+        root.currentLog = this.text.trim() || "No logs available."
+      }
+    }
+    onExited: {
+      root.logLoading = false
     }
   }
 

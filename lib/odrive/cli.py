@@ -262,8 +262,23 @@ def main():
     # auto-mount
     subparsers.add_parser("auto-mount", help="Mount all drives configured for auto-mount")
 
+    # files
+    p_files = subparsers.add_parser("files", help="List files in a cloud drive")
+    p_files.add_argument("remote", help="Remote name")
+    p_files.add_argument("path", nargs="?", default="", help="Subfolder path")
+
+    # log
+    p_log = subparsers.add_parser("log", help="View mount logs for a remote")
+    p_log.add_argument("remote", help="Remote name")
+
+    # config
+    p_cfg = subparsers.add_parser("config", help="Get or set configuration")
+    p_cfg.add_argument("key", nargs="?", default="", help="Config key")
+    p_cfg.add_argument("value", nargs="?", default="", help="New value")
+
     # gui / summon
-    subparsers.add_parser("gui", help="Open the ODrive desktop panel")
+    subparsers.add_parser("gui", help="Open the ODrive desktop app")
+    subparsers.add_parser("app", help="Open the ODrive desktop app")
 
     args = parser.parse_args()
     manager = DriveManager()
@@ -332,7 +347,35 @@ def main():
         mounted = [k for k, v in results.items() if v]
         print(f"Auto-mounted {len(mounted)} drives.")
 
-    elif args.command in ("gui", "summon"):
+    elif args.command == "files":
+        items = manager.list_dir(args.remote, getattr(args, "path", ""))
+        print(json.dumps(items, indent=2))
+
+    elif args.command == "log":
+        log_text = manager.get_log(args.remote)
+        print(log_text)
+
+    elif args.command == "config":
+        cfg = load_config()
+        if args.key:
+            if args.value:
+                # Set key
+                val = args.value
+                if val.lower() == "true":
+                    val = True
+                elif val.lower() == "false":
+                    val = False
+                elif val.isdigit():
+                    val = int(val)
+                cfg[args.key] = val
+                save_config(cfg)
+                print(f"Set {args.key} = {val}")
+            else:
+                print(f"{args.key} = {cfg.get(args.key)}")
+        else:
+            print(json.dumps(cfg, indent=2))
+
+    elif args.command in ("gui", "summon", "app"):
         summon_gui()
 
 

@@ -433,4 +433,82 @@ class DriveManager:
             "recentFiles": all_recent[:10],
             "vfsCacheMode": cfg.get("vfs_cache_mode", "full"),
             "cacheMaxSizeGb": cfg.get("cache_max_size_gb", 10),
+            "cacheMaxAge": cfg.get("cache_max_age", "24h"),
+            "autoMountAll": cfg.get("auto_mount_all", True),
+            "pollIntervalSec": cfg.get("poll_interval_sec", 30),
         }
+
+    def list_dir(self, remote_name: str, subpath: str = "") -> List[dict]:
+        """List files and folders in a remote, either locally if mounted or via rclone."""
+        is_mounted, mount_path = self.is_remote_mounted(remote_name)
+        subpath = subpath.strip("/")
+        items = []
+
+        if is_mounted and os.path.exists(mount_path):
+            target_dir = Path(mount_path) / subpath if subpath else Path(mount_path)
+            if target_dir.exists() and target_dir.is_dir():
+                try:
+                    with os.scandir(target_dir) as it:
+                        for entry in it:
+                            if entry.name.startswith("."):
+                                continue
+                            try:
+                                is_dir = entry.is_dir()
+                                st = entry.stat()
+                                items.append({
+                                    "name": entry.name,
+                                    "isDir": is_dir,
+                                    "size": 0 if is_dir else st.st_size,
+                                    "modifiedTs": int(st.st_mtime),
+                                    "path": entry.path,
+                                    "relPath": f"{subpath}/{entry.name}".strip("/"),
+                                })
+                            except OSError:
+                                continue
+                except OSError:
+                    pass
+        elif self.rclone_bin:
+            # Not mounted: query via rclone lsjson
+            remote_target = f"{remote_name}:{subpath}" if subpath else f"{remote_name}:"
+            try:
+                res = subprocess.run(
+                    [self.rclone_bin, "lsjson", remote_target, "--max-depth", "1"],
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                    check=False,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    raw_items = json.loads(res.stdout)
+                    for item in raw_items:
+                        name = item.get("Name", "")
+                        if name.startswith("."):
+                            continue
+                        is_dir = item.get("IsDir", False)
+                        items.append({
+                            "name": name,
+                            "isDir": is_dir,
+                            "size": 0 if is_dir else int(item.get("Size", 0) or 0),
+                            "modifiedTs": 0,
+                            "path": "",
+                            "relPath": f"{subpath}/{name}".strip("/"),
+                        })
+            except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+                pass
+
+        # Sort: directories first, then alphabetical
+        items.sort(key=lambda x: (not x["isDir"], x["name"].lower()))
+        return items
+
+    def get_log(self, remote_name: str, max_lines: int = 50) -> str:
+        """Read recent mount logs for a remote."""
+        log_file = self.state_dir / f"mount_{remote_name}.log"
+        if not log_file.exists():
+            return "No log file found."
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+                return "".join(lines[-max_lines:])
+        except OSError as e:
+            return f"Error reading log: {e}"
+

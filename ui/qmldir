@@ -1,5 +1,6 @@
 CloudIcon 1.0 CloudIcon.qml
 DriveRow 1.0 DriveRow.qml
+DriveWindow 1.0 DriveWindow.qml
 EmptyState 1.0 EmptyState.qml
 RecentFiles 1.0 RecentFiles.qml
 Service 1.0 Service.qml
