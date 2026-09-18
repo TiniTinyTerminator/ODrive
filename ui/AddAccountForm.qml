@@ -126,13 +126,12 @@ Item {
         elide: Text.ElideRight
       }
 
-      if (root.selectedProvider) {
-        Text {
-          text: root.selectedProvider.glyph || "󰅟"
-          color: root.selectedProvider.color || Color.accent
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.heading
-        }
+      Text {
+        visible: root.selectedProvider !== null
+        text: root.selectedProvider ? (root.selectedProvider.glyph || "󰅟") : ""
+        color: root.selectedProvider && root.selectedProvider.color ? root.selectedProvider.color : Color.accent
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.heading
       }
     }
 
@@ -511,7 +510,6 @@ Item {
             text: "Authorize in Browser"
             iconText: root.selectedProvider ? root.selectedProvider.glyph : "󰊭"
             fontFamily: root.fontFamily
-            fontBold: true
             foreground: root.foreground
             bordered: true
             onClicked: {
@@ -612,7 +610,6 @@ Item {
           text: (root.backend && root.backend.authBusy) ? "Connecting…" : "Connect & Mount Nextcloud"
           iconText: "󰒋"
           fontFamily: root.fontFamily
-          fontBold: true
           foreground: root.foreground
           bordered: true
           onClicked: {
@@ -666,7 +663,6 @@ Item {
           text: (root.backend && root.backend.authBusy) ? "Connecting…" : "Connect & Mount WebDAV"
           iconText: "󰒋"
           fontFamily: root.fontFamily
-          fontBold: true
           foreground: root.foreground
           bordered: true
           onClicked: {
@@ -742,7 +738,6 @@ Item {
           text: (root.backend && root.backend.authBusy) ? "Connecting…" : "Connect & Mount S3 Storage"
           iconText: "󰋊"
           fontFamily: root.fontFamily
-          fontBold: true
           foreground: root.foreground
           bordered: true
           onClicked: {
@@ -790,7 +785,6 @@ Item {
           text: (root.backend && root.backend.authBusy) ? "Connecting…" : "Connect & Mount Proton Drive"
           iconText: "󰅟"
           fontFamily: root.fontFamily
-          fontBold: true
           foreground: root.foreground
           bordered: true
           onClicked: {

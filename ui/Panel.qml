@@ -16,6 +16,7 @@ Panel {
   property string currentView: "drives" // "drives" | "add" | "settings"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
+  readonly property color background: bar ? bar.background : Color.background
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color accent: Color.accent
   readonly property color dim: Qt.darker(foreground, 1.55)
@@ -182,7 +183,7 @@ Panel {
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AlwaysOff }
 
         Column {
           id: mainContentCol
