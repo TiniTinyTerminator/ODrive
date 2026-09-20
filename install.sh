@@ -100,7 +100,11 @@ rm -f "$HOME/.local/share/applications/odrive.desktop"
 reload_shell
 
 if [[ "$ENABLE_BAR" == true ]] && command -v omarchy >/dev/null 2>&1; then
-  if omarchy plugin list --json 2>/dev/null | grep -q "\"id\":\"$PLUGIN_ID\",\"name\":\"[^\"]*\",\"kinds\":[^]]*],\"enabled\":true"; then
+  if omarchy plugin list --json 2>/dev/null | python3 -c '
+import json, sys
+plugins = json.load(sys.stdin)
+sys.exit(0 if any(p.get("id") == sys.argv[1] and p.get("enabled") for p in plugins) else 1)
+' "$PLUGIN_ID" 2>/dev/null; then
     echo "ODrive is already enabled in the bar."
   else
     omarchy plugin enable "$PLUGIN_ID" right >/dev/null 2>&1 \

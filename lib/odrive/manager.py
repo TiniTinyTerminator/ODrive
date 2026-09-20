@@ -23,6 +23,18 @@ from .config import (
 )
 from .providers import PROVIDERS, detect_provider
 
+# rclone reports this total/free size through statfs when a backend can't report its quota
+UNKNOWN_QUOTA_BYTES = 1 << 50
+
+
+def _unescape_mount_field(field: str) -> str:
+    """Decode the octal escapes /proc/mounts uses for spaces, tabs and backslashes."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+def _is_plausible_quota(data: dict) -> bool:
+    return 0 < int(data.get("total", 0) or 0) < UNKNOWN_QUOTA_BYTES
+
 
 def resolve_onedrive_drive(token_str: str) -> Tuple[Optional[str], Optional[str]]:
     """Query Microsoft Graph API with the OAuth access token to resolve drive_id and drive_type."""
@@ -72,26 +84,48 @@ class DriveManager:
             return ""
 
     def _ensure_onedrive_drive(self, remote_name: str) -> None:
-        """If a OneDrive remote is missing drive_id / drive_type in rclone.conf, resolve and persist them."""
-        rclone_conf = Path.home() / ".config" / "rclone" / "rclone.conf"
-        if not rclone_conf.exists():
+        """If a OneDrive remote is missing drive_id / drive_type, resolve them and persist via rclone."""
+        if not self.rclone_bin:
             return
+        info = self.list_remotes().get(remote_name, {})
+        if info.get("type") != "onedrive" or info.get("drive_id") or not info.get("token"):
+            return
+        d_id, d_type = resolve_onedrive_drive(info["token"])
+        if not d_id:
+            return
+        # Let rclone write its own config (honours RCLONE_CONFIG, encryption, concurrent token refresh).
+        # --non-interactive stops the OneDrive config flow from waiting on stdin; the values are saved regardless.
         try:
-            import configparser
-            cfg = configparser.ConfigParser()
-            cfg.read(rclone_conf)
-            if remote_name in cfg and cfg[remote_name].get("type") == "onedrive":
-                if not cfg[remote_name].get("drive_id"):
-                    tok_str = cfg[remote_name].get("token")
-                    if tok_str:
-                        d_id, d_type = resolve_onedrive_drive(tok_str)
-                        if d_id:
-                            cfg[remote_name]["drive_id"] = d_id
-                            cfg[remote_name]["drive_type"] = d_type or "personal"
-                            with open(rclone_conf, "w", encoding="utf-8") as f:
-                                cfg.write(f)
-        except Exception:
+            subprocess.run(
+                [
+                    self.rclone_bin, "config", "update", remote_name,
+                    "drive_id", d_id,
+                    "drive_type", d_type or "personal",
+                    "config_refresh_token=false",
+                    "--non-interactive",
+                ],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+        except (subprocess.SubprocessError, OSError):
             pass
+
+    def _obscure(self, secret: str) -> Optional[str]:
+        """Obscure a password with rclone, passing it on stdin so it never shows up in the process list."""
+        try:
+            res = subprocess.run(
+                [self.rclone_bin, "obscure", "-"],
+                input=secret,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (subprocess.SubprocessError, OSError):
+            return None
+        return res.stdout.strip() if res.returncode == 0 and res.stdout.strip() else None
 
     def list_remotes(self) -> Dict[str, dict]:
         """Fetch all remotes configured in rclone."""
@@ -122,14 +156,17 @@ class DriveManager:
                 for line in f:
                     parts = line.split()
                     if len(parts) >= 2:
-                        device = parts[0]
-                        mount_point = parts[1]
+                        device = _unescape_mount_field(parts[0])
+                        mount_point = _unescape_mount_field(parts[1])
                         fstype = parts[2] if len(parts) > 2 else ""
                         # rclone mounts usually show device as '<remote>:' or fstype 'fuse.rclone'
                         if "rclone" in fstype or ":" in device:
                             remote_name = device.rstrip(":")
                             # Also check if it's within our mount_root
-                            if mount_point.startswith(mount_root) or "rclone" in fstype:
+                            in_root = mount_point == mount_root or mount_point.startswith(
+                                mount_root.rstrip(os.sep) + os.sep
+                            )
+                            if in_root or "rclone" in fstype:
                                 mounts[mount_point] = {
                                     "remote": remote_name,
                                     "mount_point": mount_point,
@@ -139,19 +176,31 @@ class DriveManager:
             pass
         return mounts
 
+    @staticmethod
+    def _is_responsive(path: str) -> bool:
+        """A FUSE mount whose rclone process died stays in /proc/mounts but fails statfs (ENOTCONN).
+
+        statfs always reaches the daemon; stat can be answered from the kernel's attribute cache.
+        """
+        try:
+            os.statvfs(path)
+            return True
+        except OSError:
+            return False
+
     def is_remote_mounted(self, remote_name: str) -> Tuple[bool, str]:
         """Check if remote is currently mounted and return (is_mounted, mount_path)."""
         expected_path = str(get_mount_path_for_remote(remote_name))
         active_mounts = self.get_active_mounts()
 
-        # Check by expected mount path
+        # Check by expected mount path; a stale entry counts as unmounted so it can be cleaned up and remounted
         if expected_path in active_mounts:
-            return True, expected_path
+            return self._is_responsive(expected_path), expected_path
 
         # Check by remote name in active mounts
         for mp, info in active_mounts.items():
             if info.get("remote") == remote_name:
-                return True, mp
+                return self._is_responsive(mp), mp
 
         # Fallback check: os.path.ismount (and ensure it is responding)
         try:
@@ -172,9 +221,16 @@ class DriveManager:
             return {}
         try:
             with open(self.cache_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                cache = json.load(f)
         except (OSError, json.JSONDecodeError):
             return {}
+        if not isinstance(cache, dict):
+            return {}
+        # Drop quotas cached from rclone's "unknown" placeholder size
+        return {
+            name: entry for name, entry in cache.items()
+            if not entry.get("data", {}).get("known") or _is_plausible_quota(entry["data"])
+        }
 
     def _save_quota_cache(self, cache: dict) -> None:
         try:
@@ -195,7 +251,7 @@ class DriveManager:
                 total = st.f_blocks * st.f_frsize
                 free = st.f_bavail * st.f_frsize
                 used = max(0, total - free)
-                if total > 0:
+                if total > 0 and total < UNKNOWN_QUOTA_BYTES:
                     percent = round(used / total * 100.0, 1)
                     quota_data = {
                         "total": total,
@@ -249,7 +305,7 @@ class DriveManager:
                 trashed = int(about.get("trashed", 0) or 0)
                 percent = (used / total * 100.0) if total > 0 else 0.0
 
-                if total > 0:
+                if total > 0 and total < UNKNOWN_QUOTA_BYTES:
                     quota_data = {
                         "total": total,
                         "used": used,
@@ -287,6 +343,10 @@ class DriveManager:
 
         try:
             for root, dirs, files in os.walk(mount_path):
+                # Every directory listed over FUSE costs a remote API call, so stop walking once the budget is spent
+                if checked >= max_files_to_check:
+                    break
+
                 # Depth limiter prevents slow deep directory crawling over FUSE
                 current_depth = root.rstrip(os.sep).count(os.sep) - mount_depth
                 if current_depth >= max_depth:
@@ -346,7 +406,6 @@ class DriveManager:
             return True, f"{remote_name} is already mounted at {mount_path}"
 
         mount_dir = get_mount_path_for_remote(remote_name)
-        mount_dir.mkdir(parents=True, exist_ok=True)
 
         # Clear any stale or broken mount on the directory before mounting
         try:
@@ -365,6 +424,12 @@ class DriveManager:
                         subprocess.run([self.fusermount_bin, "-u", "-z", str(mount_dir)], capture_output=True, check=False)
         except Exception:
             pass
+
+        # Only after clearing stale mounts: mkdir on a dead FUSE mount point raises
+        try:
+            mount_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return False, f"Cannot create mount directory {mount_dir}: {e}"
 
         cfg = load_config()
         vfs_mode = cfg.get("vfs_cache_mode", "full")
@@ -487,6 +552,18 @@ class DriveManager:
             results[name] = ok
         return results
 
+    def auto_mount(self) -> Dict[str, bool]:
+        """Mount remotes flagged for auto-mount; a per-remote auto_mount overrides auto_mount_all."""
+        cfg = load_config()
+        default = cfg.get("auto_mount_all", True)
+        remotes_cfg = cfg.get("remotes", {})
+        results = {}
+        for name in self.list_remotes().keys():
+            if remotes_cfg.get(name, {}).get("auto_mount", default):
+                ok, _ = self.mount(name)
+                results[name] = ok
+        return results
+
     def unmount_all(self) -> Dict[str, bool]:
         """Unmount all currently mounted remotes."""
         remotes = self.list_remotes()
@@ -550,6 +627,101 @@ class DriveManager:
             return False, "Connection test timed out. Verify server address and network."
         except OSError as e:
             return False, str(e)
+
+    def rename_remote(self, remote_name: str, new_name: str, mount_path: Optional[str] = None) -> Tuple[bool, str]:
+        """Rename an rclone remote, carrying its ODrive settings, quota cache and mount log across."""
+        if not self.rclone_bin:
+            return False, "rclone is not installed"
+
+        clean_name = new_name.strip()
+        if not clean_name:
+            return False, "New name cannot be empty"
+        if clean_name != "".join(c for c in clean_name if c.isalnum() or c in ("-", "_")):
+            return False, "Names may only contain letters, digits, '-' and '_'"
+        # rclone's rename prompt reads a menu selection, so a digits-only name would pick the wrong remote
+        if remote_name.isdigit() or clean_name.isdigit():
+            return False, "Names cannot consist of digits only"
+
+        remotes = self.list_remotes()
+        if remote_name not in remotes:
+            return False, f"No remote named '{remote_name}'"
+        if clean_name == remote_name:
+            if mount_path is not None:
+                return self.set_remote_mount_path(remote_name, mount_path)
+            return True, f"{remote_name} is unchanged"
+        if clean_name in remotes:
+            return False, f"A remote named '{clean_name}' already exists"
+
+        was_mounted, _ = self.is_remote_mounted(remote_name)
+        if was_mounted:
+            ok, msg = self.unmount(remote_name)
+            if not ok:
+                return False, f"Cannot rename while mounted: {msg}"
+
+        old_mount_dir = get_mount_path_for_remote(remote_name)
+
+        # rclone has no 'config rename' subcommand, so drive its interactive menu:
+        # r) Rename remote -> existing name -> new name -> q) Quit
+        try:
+            subprocess.run(
+                [self.rclone_bin, "config"],
+                input=f"r\n{remote_name}\n{clean_name}\nq\n",
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except (subprocess.SubprocessError, OSError) as e:
+            return False, f"Failed to rename remote: {e}"
+
+        # rclone reports menu problems by asking again rather than failing, so confirm the result
+        remotes = self.list_remotes()
+        if clean_name not in remotes or remote_name in remotes:
+            if was_mounted:
+                self.mount(remote_name)
+            return False, f"rclone did not rename '{remote_name}'"
+
+        cfg = load_config()
+        remotes_cfg = cfg.setdefault("remotes", {})
+        remote_cfg = remotes_cfg.pop(remote_name, {})
+        if mount_path is not None:
+            clean_path = mount_path.strip()
+            if clean_path:
+                remote_cfg["mount_path"] = clean_path
+                remote_cfg["custom_mount_path"] = clean_path
+            else:
+                remote_cfg.pop("mount_path", None)
+                remote_cfg.pop("custom_mount_path", None)
+        if remote_cfg:
+            remotes_cfg[clean_name] = remote_cfg
+        save_config(cfg)
+
+        cache = self._load_quota_cache()
+        if remote_name in cache:
+            cache[clean_name] = cache.pop(remote_name)
+            self._save_quota_cache(cache)
+
+        old_log = self.state_dir / f"mount_{remote_name}.log"
+        if old_log.exists():
+            try:
+                old_log.replace(self.state_dir / f"mount_{clean_name}.log")
+            except OSError:
+                pass
+
+        # Clean up the old default mount directory, but never one that still holds files
+        try:
+            if old_mount_dir != get_mount_path_for_remote(clean_name):
+                old_mount_dir.rmdir()
+        except OSError:
+            pass
+
+        target_path = str(get_mount_path_for_remote(clean_name))
+        if was_mounted:
+            ok, msg = self.mount(clean_name)
+            if not ok:
+                return False, f"Renamed to {clean_name} but remount failed: {msg}"
+            return True, f"Renamed to {clean_name}, mounted at {target_path}"
+        return True, f"Renamed {remote_name} to {clean_name}"
 
     def set_remote_mount_path(self, remote_name: str, new_path: str) -> Tuple[bool, str]:
         """Change the mount location of a specific remote and remount if needed."""
@@ -724,7 +896,14 @@ class DriveManager:
         if clean_name in existing:
             return False, f"A remote named '{clean_name}' already exists. Please choose a different name."
 
-        create_args = [self.rclone_bin, "config", "create", clean_name, rclone_type]
+        # Passwords are pre-obscured via stdin and passed with --no-obscure so plaintext never lands in argv
+        create_args = [self.rclone_bin, "config", "create", "--no-obscure", clean_name, rclone_type]
+
+        def obscured(secret: str) -> str:
+            value = self._obscure(secret)
+            if value is None:
+                raise ValueError("Failed to obscure password with rclone")
+            return value
 
         if provider_id == "nextcloud" or (rclone_type == "webdav" and options.get("vendor") == "nextcloud"):
             url = options.get("url", "").strip()
@@ -744,11 +923,15 @@ class DriveManager:
             if not ("/remote.php/dav/files/" in url or url.endswith("/remote.php/webdav")):
                 url = url.rstrip("/") + f"/remote.php/dav/files/{user}"
 
+            try:
+                obscured_pass = obscured(password)
+            except ValueError as e:
+                return False, str(e)
             create_args.extend([
                 "url", url,
                 "vendor", "nextcloud",
                 "user", user,
-                "pass", password,
+                "pass", obscured_pass,
             ])
 
         elif rclone_type == "webdav":
@@ -764,7 +947,10 @@ class DriveManager:
             if options.get("user"):
                 create_args.extend(["user", options["user"]])
             if options.get("pass"):
-                create_args.extend(["pass", options["pass"]])
+                try:
+                    create_args.extend(["pass", obscured(options["pass"])])
+                except ValueError as e:
+                    return False, str(e)
 
         elif rclone_type == "s3":
             prov = options.get("provider", "Other")
@@ -783,11 +969,16 @@ class DriveManager:
             password = options.get("password", "").strip()
             if not username or not password:
                 return False, "Username and password are required"
-            create_args.extend(["username", username, "password", password])
+            try:
+                create_args.extend(["username", username, "password", obscured(password)])
+            except ValueError as e:
+                return False, str(e)
             if options.get("2fa"):
                 create_args.extend(["2fa", options["2fa"].strip()])
 
         else:
+            # Arbitrary options may hold plaintext passwords, so let rclone obscure them itself
+            create_args.remove("--no-obscure")
             for k, v in options.items():
                 if v is not None and str(v) != "":
                     create_args.extend([k, str(v)])

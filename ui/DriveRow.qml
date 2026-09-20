@@ -12,12 +12,50 @@ CursorSurface {
   property string fontFamily: Style.font.family
   property bool isMounted: drive ? drive.mounted === true : false
   property bool editingLocation: false
+  // Mount root, so the suggested path can follow a renamed drive
+  property string mountRoot: "~/Cloud"
+  readonly property string defaultMountPath: mountRoot + "/" + (drive ? drive.name : "")
+  readonly property bool hasCustomPath: drive ? String(drive.mountPath) !== defaultMountPath : false
+  property bool confirmingRemove: false
 
   signal toggleMount()
   signal openFolder()
   signal updateMountPath(string newPath)
+  signal renameDrive(string newName, var newPath)
   signal removeDrive()
   signal selected()
+
+  // True once the mount path has been typed in by hand, so renaming stops rewriting it
+  property bool pathEdited: false
+  readonly property bool hasEdits: editingLocation && root.drive
+    && (nameInput.text.trim() !== String(root.drive.name)
+        || pathInput.text.trim() !== String(root.drive.mountPath))
+
+  function resetEditor() {
+    nameInput.text = root.drive ? String(root.drive.name) : ""
+    pathInput.text = root.drive ? String(root.drive.mountPath) : ""
+    root.pathEdited = false
+  }
+
+  // An empty path means "use the default location", so don't store one that is already the default
+  function _pathArgument(name, path) {
+    return (path === "" || path === root.mountRoot + "/" + name) ? "" : path
+  }
+
+  function applyEdits() {
+    if (!root.drive) return
+    var oldName = String(root.drive.name)
+    var newName = nameInput.text.trim()
+    var newPath = pathInput.text.trim()
+    root.editingLocation = false
+
+    if (newName !== "" && newName !== oldName) {
+      root.renameDrive(newName, _pathArgument(newName, newPath))
+    } else if (newPath !== String(root.drive.mountPath)) {
+      root.updateMountPath(_pathArgument(oldName, newPath))
+    }
+    root.pathEdited = false
+  }
 
   implicitWidth: parent ? parent.width : Style.space(360)
   implicitHeight: column.implicitHeight + Style.space(16)
@@ -110,10 +148,13 @@ CursorSurface {
       // Action: Edit mount location
       PanelActionButton {
         iconText: "󰏫"
-        tooltipText: root.editingLocation ? "Close location editor" : "Change mount directory"
+        tooltipText: root.editingLocation ? "Close editor" : "Rename or move this drive"
         foreground: root.editingLocation ? Color.accent : root.foreground
         hoverColor: Color.accent
-        onClicked: { root.editingLocation = !root.editingLocation }
+        onClicked: {
+          if (!root.editingLocation) root.resetEditor()
+          root.editingLocation = !root.editingLocation
+        }
       }
 
       // Action: Open in file manager
@@ -137,9 +178,47 @@ CursorSurface {
       PanelActionButton {
         iconText: "󰆴"
         tooltipText: "Remove remote"
-        foreground: Qt.darker(root.foreground, 1.6)
+        foreground: root.confirmingRemove ? Color.urgent : Qt.darker(root.foreground, 1.6)
         hoverColor: Color.urgent
-        onClicked: root.removeDrive()
+        onClicked: { root.confirmingRemove = !root.confirmingRemove }
+      }
+    }
+
+    // Inline confirmation before deleting the rclone remote
+    RowLayout {
+      visible: root.confirmingRemove
+      width: parent.width
+      spacing: Style.space(8)
+
+      Text {
+        Layout.fillWidth: true
+        text: "Remove " + (root.drive ? root.drive.name : "") + "? This deletes its rclone configuration."
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption - Style.space(1)
+        color: Color.urgent
+        wrapMode: Text.WordWrap
+      }
+
+      Button {
+        text: "Remove"
+        iconText: "󰆴"
+        fontFamily: root.fontFamily
+        fontSize: Style.font.caption
+        foreground: Color.urgent
+        bordered: true
+        onClicked: {
+          root.confirmingRemove = false
+          root.removeDrive()
+        }
+      }
+
+      Button {
+        text: "Cancel"
+        fontFamily: root.fontFamily
+        fontSize: Style.font.caption
+        foreground: root.foreground
+        bordered: false
+        onClicked: { root.confirmingRemove = false }
       }
     }
 
@@ -187,7 +266,7 @@ CursorSurface {
       }
     }
 
-    // Row 3: Inline Mount Location Editor
+    // Row 3: Inline Name & Mount Location Editor
     BorderSurface {
       visible: root.editingLocation
       width: parent.width
@@ -205,18 +284,59 @@ CursorSurface {
         spacing: Style.space(8)
 
         Text {
-          text: "Change Mount Location"
+          text: "Edit Drive"
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           font.bold: true
           color: root.foreground
         }
 
+        Text {
+          text: "Name:"
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption - Style.space(1)
+          color: Qt.darker(root.foreground, 1.4)
+        }
+
+        TextField {
+          id: nameInput
+          Layout.fillWidth: true
+          placeholderText: root.drive ? root.drive.name : ""
+          onAccepted: { if (root.hasEdits) root.applyEdits() }
+          // Letters, digits, '-' and '_' are what rclone remote names allow here
+          onTextEdited: {
+            var cleaned = text.replace(/[^A-Za-z0-9_-]/g, "")
+            if (cleaned !== text) text = cleaned
+            // Keep the suggested path in step with the name until the path is edited by hand
+            if (!root.pathEdited && !root.hasCustomPath) {
+              pathInput.text = root.mountRoot + "/" + cleaned
+            }
+          }
+        }
+
+        Text {
+          text: "Mount location:"
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption - Style.space(1)
+          color: Qt.darker(root.foreground, 1.4)
+        }
+
         TextField {
           id: pathInput
           Layout.fillWidth: true
-          text: root.drive ? root.drive.mountPath : ""
-          placeholderText: "~/Cloud/" + (root.drive ? root.drive.name : "")
+          placeholderText: root.defaultMountPath
+          onAccepted: { if (root.hasEdits) root.applyEdits() }
+          onTextEdited: { root.pathEdited = true }
+        }
+
+        Text {
+          visible: root.isMounted
+          text: "Saving unmounts the drive and mounts it again."
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption - Style.space(2)
+          color: Qt.darker(root.foreground, 1.6)
+          wrapMode: Text.WordWrap
+          Layout.fillWidth: true
         }
 
         RowLayout {
@@ -224,16 +344,15 @@ CursorSurface {
           spacing: Style.space(8)
 
           Button {
-            text: "Save & Remount"
+            text: "Save"
             iconText: "󰄬"
             fontFamily: root.fontFamily
             fontSize: Style.font.caption
             foreground: root.foreground
             bordered: true
-            onClicked: {
-              root.updateMountPath(pathInput.text.trim())
-              root.editingLocation = false
-            }
+            enabled: root.hasEdits
+            opacity: enabled ? 1.0 : 0.45
+            onClicked: { root.applyEdits() }
           }
 
           Button {
@@ -242,7 +361,10 @@ CursorSurface {
             fontSize: Style.font.caption
             foreground: root.foreground
             bordered: false
-            onClicked: { root.editingLocation = false }
+            onClicked: {
+              root.editingLocation = false
+              root.resetEditor()
+            }
           }
 
           Item { Layout.fillWidth: true }

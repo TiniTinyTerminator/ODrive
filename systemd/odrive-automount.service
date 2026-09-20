@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/bin/odrive auto-mount
+ExecStart=%h/.local/bin/odrive auto-mount --once
 RemainAfterExit=yes
 
 [Install]

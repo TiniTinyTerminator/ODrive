@@ -28,6 +28,10 @@ Item {
   property bool actionBusy: false
   property string lastAction: ""
   property string lastError: ""
+  // Whether lastError came from a status refresh (cleared by the next good refresh) or from an action
+  property bool _statusError: false
+  // Something is wrong right now: drives the bar's error colour, cleared by the next good refresh
+  property bool actionFailed: false
 
   readonly property int refreshIntervalSec: {
     var v = settings ? settings["refreshIntervalSec"] : undefined
@@ -49,6 +53,7 @@ Item {
     var parsed = Model.parseStatus(raw)
     if (!parsed.ok) {
       lastError = parsed.lastError || "Failed to parse ODrive status"
+      _statusError = true
       return
     }
 
@@ -64,7 +69,11 @@ Item {
     if (parsed.cacheMaxAge) cacheMaxAge = String(parsed.cacheMaxAge)
     if (parsed.autoMountAll !== undefined) autoMountAll = parsed.autoMountAll === true
     if (parsed.pollIntervalSec !== undefined) pollIntervalSec = Number(parsed.pollIntervalSec)
-    lastError = ""
+    if (_statusError) {
+      lastError = ""
+      _statusError = false
+    }
+    actionFailed = false
 
     // Apply drives with pending optimistic overrides cleared if reality caught up
     var rawDrives = parsed.drives || []
@@ -98,7 +107,7 @@ Item {
     drives = updated
 
     lastAction = targetState ? ("Mounting " + remoteName + "…") : ("Unmounting " + remoteName + "…")
-    runAction([odriveCli, targetState ? "mount" : "unmount", remoteName])
+    runAction([odriveCli, targetState ? "mount" : "unmount", remoteName], remoteName)
   }
 
   function mountAll() {
@@ -142,6 +151,7 @@ Item {
     authSuccess = false
     authSuccessMessage = ""
 
+    authProc.environment = ({ ODRIVE_OPTIONS: null })
     var args = [odriveCli, "add-oauth", remoteName, providerId]
     if (clientId && clientId !== "") {
       args.push("--client-id")
@@ -179,7 +189,9 @@ Item {
     authSuccess = false
     authSuccessMessage = ""
 
-    var args = [odriveCli, "add-credentials", remoteName, providerId, "--options", JSON.stringify(optionsDict)]
+    // Secrets travel via the environment, not argv, so they don't show up in the process list
+    authProc.environment = ({ ODRIVE_OPTIONS: JSON.stringify(optionsDict) })
+    var args = [odriveCli, "add-credentials", remoteName, providerId]
     if (mountPath && mountPath !== "") {
       args.push("--mount-path")
       args.push(mountPath)
@@ -189,6 +201,17 @@ Item {
     }
     authProc.command = args
     authProc.running = true
+  }
+
+  function renameRemote(remoteName, newName, newPath) {
+    if (actionBusy) return
+    lastAction = "Renaming " + remoteName + " to " + newName + "…"
+    var args = [odriveCli, "rename", remoteName, newName]
+    if (newPath !== undefined && newPath !== null) {
+      args.push("--mount-path")
+      args.push(newPath)
+    }
+    runAction(args, remoteName)
   }
 
   function setRemoteMountPath(remoteName, newPath) {
@@ -208,10 +231,57 @@ Item {
     Quickshell.execDetached(["xdg-open", filePath])
   }
 
-  function runAction(commandList) {
+  // Remote whose optimistic mount state belongs to the running action
+  property string _actionRemote: ""
+  property var _actionQueue: []
+
+  function runAction(commandList, remoteName) {
+    if (actionProc.running) {
+      _actionQueue.push({ command: commandList, remote: remoteName || "" })
+      return
+    }
     actionBusy = true
+    _actionRemote = remoteName || ""
     actionProc.command = commandList
     actionProc.running = true
+  }
+
+  function _cleanOutput(text) {
+    return String(text || "").replace(/\x1b\[[0-9;]*m/g, "").trim()
+  }
+
+  function _finishAction(exitCode) {
+    var out = _cleanOutput(actionOut.text)
+    var err = _cleanOutput(actionErr.text)
+    var jsonMessage = ""
+    try {
+      var res = JSON.parse(out)
+      if (res && res.ok === false) jsonMessage = String(res.message || res.error || "")
+    } catch (e) {}
+
+    if (exitCode !== 0 || jsonMessage !== "") {
+      lastError = jsonMessage || err || out || "Command failed"
+      _statusError = false
+      actionFailed = true
+    } else if (!_statusError) {
+      lastError = ""
+      actionFailed = false
+    }
+
+    // Drop the optimistic state either way; the refresh below shows what really happened
+    if (_actionRemote !== "") delete _pendingMounts[_actionRemote]
+    _actionRemote = ""
+
+    if (_actionQueue.length > 0) {
+      var next = _actionQueue.shift()
+      runAction(next.command, next.remote)
+      return
+    }
+
+    actionBusy = false
+    lastAction = ""
+    pollTimer.restart()
+    refresh()
   }
 
   property string vfsCacheMode: "full"
@@ -232,7 +302,7 @@ Item {
   function removeRemote(remoteName) {
     if (actionBusy) return
     lastAction = "Removing " + remoteName + "…"
-    runAction([odriveCli, "remove", remoteName])
+    runAction([odriveCli, "remove", "--yes", remoteName])
   }
 
   function updateConfig(key, value) {
@@ -272,19 +342,11 @@ Item {
     id: actionProc
     command: []
     running: false
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var out = this.text.trim()
-        if (out.indexOf("✗") !== -1 || out.indexOf("Failed") !== -1) {
-          root.lastError = out
-        }
-      }
-    }
-    onExited: {
-      root.actionBusy = false
-      root.lastAction = ""
-      pollTimer.restart()
-      root.refresh()
+    stdout: StdioCollector { id: actionOut }
+    stderr: StdioCollector { id: actionErr }
+    onExited: function(exitCode, exitStatus) {
+      // Let the collectors deliver their final text before reading it
+      Qt.callLater(function() { root._finishAction(exitCode) })
     }
   }
 
@@ -343,5 +405,7 @@ Item {
 
   Component.onCompleted: {
     root.refresh()
+    // Mounts on first shell start of the login session; the CLI skips it on later reloads
+    runAction([odriveCli, "auto-mount", "--once"])
   }
 }

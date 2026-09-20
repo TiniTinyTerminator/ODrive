@@ -24,7 +24,23 @@ Panel {
 
   readonly property bool hasDrives: service.totalDrives > 0
   readonly property bool hasMounted: service.mountedDrives > 0
-  readonly property color barIconColor: hasMounted ? barForeground : Qt.darker(barForeground, 1.6)
+
+  // Bar status at a glance: "online" every drive mounted, "offline" some or none mounted,
+  // "error" rclone missing or the last command failed. The theme has no green/amber, so
+  // these are muted tones picked to sit next to Color.urgent.
+  readonly property color statusOnline: "#6fa96f"
+  readonly property color statusOffline: "#c9a24a"
+  readonly property string statusState: {
+    if (!service.installed || service.actionFailed) return "error"
+    if (hasDrives && service.allMounted) return "online"
+    return "offline"
+  }
+  readonly property color statusColor: {
+    if (statusState === "error") return root.urgent
+    if (statusState === "online") return statusOnline
+    return statusOffline
+  }
+  readonly property color barIconColor: statusColor
 
   // Subtitle in hero
   readonly property string heroMeta: {
@@ -38,6 +54,7 @@ Panel {
   // Bar tooltip
   readonly property string barTooltipText: {
     if (!service.installed) return "ODrive: rclone not installed"
+    if (service.actionFailed && service.lastError !== "") return "ODrive: " + service.lastError
     if (!hasDrives) return "ODrive: Click to configure cloud drives"
     var names = []
     for (var i = 0; i < service.drives.length; i++) {
@@ -101,32 +118,8 @@ Panel {
           iconSize: Style.bar.iconFont
           color: root.barIconColor
           fontFamily: root.fontFamily
-          active: root.hasMounted
+          active: root.statusState === "online"
           busy: service.actionBusy || service.refreshing
-        }
-
-        // Mounted drive count badge
-        Rectangle {
-          visible: service.totalDrives > 1 && root.hasMounted
-          anchors {
-            right: parent.right
-            bottom: parent.bottom
-            margins: -Style.space(2)
-          }
-          width: Math.max(badgeText.implicitWidth + Style.space(6), Style.space(14))
-          height: Style.space(13)
-          radius: height / 2
-          color: Color.accent
-
-          Text {
-            id: badgeText
-            anchors.centerIn: parent
-            text: String(service.mountedDrives)
-            color: Color.background
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption - Style.space(3)
-            font.bold: true
-          }
         }
       }
     }
@@ -209,8 +202,8 @@ Panel {
               iconComponent: Component {
                 CloudIcon {
                   iconSize: Style.font.display
-                  color: root.hasMounted ? Color.accent : root.foreground
-                  active: root.hasMounted
+                  color: root.statusColor
+                  active: root.statusState === "online"
                   busy: service.actionBusy || service.refreshing
                 }
               }
@@ -316,10 +309,14 @@ Panel {
                   drive: modelData
                   foreground: root.foreground
                   fontFamily: root.fontFamily
+                  mountRoot: service.mountRoot
                   onToggleMount: service.toggleMount(modelData.name, modelData.mounted)
                   onOpenFolder: service.openFolder(modelData.name)
                   onUpdateMountPath: function(newPath) {
                     service.setRemoteMountPath(modelData.name, newPath)
+                  }
+                  onRenameDrive: function(newName, newPath) {
+                    service.renameRemote(modelData.name, newName, newPath)
                   }
                   onRemoveDrive: service.removeRemote(modelData.name)
                 }

@@ -12,18 +12,18 @@ ODrive is a native Omarchy desktop plugin and CLI tool that brings all your clou
 
 - **Multi-Cloud Integration**: Native support for **Google Drive**, **Microsoft OneDrive**, **Dropbox**, **Nextcloud / ownCloud**, **Box**, **pCloud**, **Proton Drive**, **WebDAV**, **Amazon S3 / MinIO / R2**, and any custom rclone remote.
 - **Pure Omarchy Bar Widget**:
-  - Compact cloud glyph in the Omarchy bar with real-time mounted drive count badge.
-  - Color-coded activity indicators (idle, active mount, syncing, error).
+  - Compact cloud glyph in the Omarchy bar, coloured by state: **green** all drives mounted, **yellow** some or none mounted, **red** rclone missing or a command failed.
+  - The glyph spins while mounting, unmounting or refreshing.
   - Rich tooltip with mount status and drive names.
   - Left-click toggles the full-featured popout panel directly beneath your bar.
   - Right-click quick-toggles Mount All / Unmount All; middle-click refreshes status.
 - **Complete In-Panel Management (No Separate App Window Needed)**:
   - **Drive Cards**: Drive status, storage quota gauges, one-click mount/unmount toggle, and file manager launcher (`xdg-open`).
-  - **Custom Mount Paths**: Change the mount directory per drive inline (`󰏫` button) or set a global default mount root (`~/Cloud`).
+  - **Rename & Custom Mount Paths**: Rename a drive and change its mount directory inline (`󰏫` button), or set a global default mount root (`~/Cloud`).
   - **In-Panel GUI Account Setup**: Add new cloud remotes directly through the widget without opening a terminal window. Supports browser-based OAuth for Google Drive, OneDrive, Dropbox, Box, pCloud, and direct credentials for Nextcloud, WebDAV, S3, and Proton Drive.
   - **Settings View**: Toggle auto-mount on login and configure root paths directly from the widget.
 - **Robust CLI & Automation**:
-  - Full-featured `odrive` command line utility (`odrive status`, `odrive mount`, `odrive set-path`, `odrive add-oauth`).
+  - Full-featured `odrive` command line utility (`odrive status`, `odrive mount`, `odrive rename`, `odrive set-path`, `odrive add-oauth`).
   - Systemd user service for auto-mounting drives on login.
 
 ---
@@ -124,8 +124,17 @@ odrive unmount-all
 odrive open MyDrive
 odrive open              # opens ~/Cloud
 
+# Rename a drive (unmounts and remounts it if needed)
+odrive rename MyDrive WorkDrive
+odrive rename MyDrive WorkDrive --mount-path ~/Cloud/Work   # rename and move it
+odrive rename MyDrive WorkDrive --mount-path ""             # rename and reset to the default location
+
+# Change only the mount directory
+odrive set-path MyDrive ~/Cloud/Work
+
 # Remove a cloud drive configuration
-odrive remove MyDrive
+odrive remove MyDrive          # asks for confirmation
+odrive remove MyDrive --yes    # no prompt
 ```
 
 ---
@@ -154,11 +163,13 @@ Settings are saved in `~/.config/odrive/config.json`:
 - **`mount_root`**: Root directory where drives are mounted (default: `~/Cloud`).
 - **`vfs_cache_mode`**: rclone VFS cache mode (`off`, `minimal`, `writes`, `full`). Default: `full`.
 - **`cache_max_size_gb`**: Maximum local disk space allocated to caching files. Default: `10` GB.
-- **`auto_mount_all`**: Automatically mount enabled drives when `odrive auto-mount` runs.
+- **`auto_mount_all`**: Automatically mount enabled drives when `odrive auto-mount` runs. A per-remote `"auto_mount": false` (or `true`) under `remotes.<name>` overrides it.
 
-### Auto-Mount on Login (systemd)
+### Auto-Mount on Login
 
-To automatically mount your cloud drives upon user login, enable the included systemd service:
+The bar widget runs `odrive auto-mount --once` when the shell starts, so drives are mounted on login with no extra setup. `--once` records a marker in `$XDG_RUNTIME_DIR`, so shell reloads later in the same session don't remount drives you unmounted by hand.
+
+To mount drives before the shell starts, you can also enable the included systemd service (it uses the same marker, so the two don't conflict):
 
 ```bash
 mkdir -p ~/.config/systemd/user

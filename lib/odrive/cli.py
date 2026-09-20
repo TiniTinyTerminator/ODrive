@@ -210,6 +210,22 @@ def open_drive_folder(remote_name: str = ""):
 
 
 
+def claim_session_marker() -> bool:
+    """Return True for the first caller this login session; the runtime dir is cleared on logout."""
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime_dir:
+        return True
+    marker = Path(runtime_dir) / "odrive-automounted"
+    try:
+        fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+    os.close(fd)
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="odrive",
@@ -246,13 +262,15 @@ def main():
     # remove
     p_remove = subparsers.add_parser("remove", help="Remove a cloud drive remote")
     p_remove.add_argument("remote", help="Remote name to delete")
+    p_remove.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt")
 
     # open
     p_open = subparsers.add_parser("open", help="Open cloud mount directory in file manager")
     p_open.add_argument("remote", nargs="?", default="", help="Remote name (opens root if omitted)")
 
     # auto-mount
-    subparsers.add_parser("auto-mount", help="Mount all drives configured for auto-mount")
+    p_auto = subparsers.add_parser("auto-mount", help="Mount all drives configured for auto-mount")
+    p_auto.add_argument("--once", action="store_true", help="Only run once per login session")
 
     # files
     p_files = subparsers.add_parser("files", help="List files in a cloud drive")
@@ -281,10 +299,20 @@ def main():
     p_cred = subparsers.add_parser("add-credentials", help="Create a credentials-based remote (Nextcloud, WebDAV, S3, etc.)")
     p_cred.add_argument("remote", help="Remote name")
     p_cred.add_argument("provider", help="Provider ID (nextcloud, webdav, s3, protondrive)")
-    p_cred.add_argument("--options", default="{}", help="JSON string with options (url, user, pass, etc.)")
+    p_cred.add_argument(
+        "--options",
+        default=None,
+        help="JSON string with options (url, user, pass, etc.); defaults to $ODRIVE_OPTIONS, which keeps secrets out of the process list",
+    )
     p_cred.add_argument("--mount-path", default="", help="Custom mount directory path")
     p_cred.add_argument("--no-test", action="store_true", help="Skip connection testing")
     p_cred.add_argument("--mount", action="store_true", help="Mount immediately after configuration")
+
+    # rename
+    p_rename = subparsers.add_parser("rename", help="Rename a cloud drive remote")
+    p_rename.add_argument("remote", help="Current remote name")
+    p_rename.add_argument("new_name", help="New remote name")
+    p_rename.add_argument("--mount-path", default=None, help="Also set a custom mount directory (empty string resets to the default)")
 
     # set-path
     p_set_path = subparsers.add_parser("set-path", help="Change mount directory for a remote")
@@ -336,7 +364,9 @@ def main():
             if ok:
                 print(f"\033[1;32m✓ Mounted {name}\033[0m")
             else:
-                print(f"\033[1;31m✗ Failed to mount {name}\033[0m")
+                print(f"\033[1;31m✗ Failed to mount {name}\033[0m", file=sys.stderr)
+        if not all(results.values()):
+            sys.exit(1)
 
     elif args.command == "unmount-all":
         results = manager.unmount_all()
@@ -344,13 +374,22 @@ def main():
             if ok:
                 print(f"\033[1;32m✓ Unmounted {name}\033[0m")
             else:
-                print(f"\033[1;31m✗ Failed to unmount {name}\033[0m")
+                print(f"\033[1;31m✗ Failed to unmount {name}\033[0m", file=sys.stderr)
+        if not all(results.values()):
+            sys.exit(1)
 
     elif args.command in ("setup", "add"):
         interactive_setup(args.remote, args.provider)
 
     elif args.command == "remove":
-        confirm = input(f"Are you sure you want to remove '{args.remote}'? [y/N]: ").strip().lower()
+        if args.yes:
+            confirm = "y"
+        else:
+            try:
+                confirm = input(f"Are you sure you want to remove '{args.remote}'? [y/N]: ").strip().lower()
+            except EOFError:
+                print("\nNo terminal to confirm on; pass --yes to remove without prompting.", file=sys.stderr)
+                sys.exit(1)
         if confirm in ("y", "yes"):
             ok, msg = manager.remove_remote(args.remote)
             if ok:
@@ -363,7 +402,10 @@ def main():
         open_drive_folder(args.remote)
 
     elif args.command == "auto-mount":
-        results = manager.mount_all()
+        if args.once and not claim_session_marker():
+            print("Auto-mount already ran this session.")
+            return
+        results = manager.auto_mount()
         mounted = [k for k, v in results.items() if v]
         print(f"Auto-mounted {len(mounted)} drives.")
 
@@ -427,10 +469,12 @@ def main():
             sys.exit(1)
 
     elif args.command == "add-credentials":
+        raw_options = args.options if args.options is not None else os.environ.get("ODRIVE_OPTIONS", "{}")
         try:
-            options = json.loads(args.options) if args.options else {}
-        except json.JSONDecodeError:
-            options = {}
+            options = json.loads(raw_options) if raw_options else {}
+        except json.JSONDecodeError as e:
+            print(json.dumps({"ok": False, "error": f"Invalid options JSON: {e}"}))
+            sys.exit(1)
         ok, res = manager.add_remote_credentials(
             args.remote,
             args.provider,
@@ -459,6 +503,12 @@ def main():
                 "ok": False,
                 "error": res,
             }))
+            sys.exit(1)
+
+    elif args.command == "rename":
+        ok, msg = manager.rename_remote(args.remote, args.new_name, mount_path=getattr(args, "mount_path", None))
+        print(json.dumps({"ok": ok, "message": msg, "remote": args.new_name}))
+        if not ok:
             sys.exit(1)
 
     elif args.command == "set-path":

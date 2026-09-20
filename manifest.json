@@ -28,9 +28,7 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "refreshIntervalSec": 30,
-      "autoMountAll": true,
-      "mountRoot": "~/Cloud"
+      "refreshIntervalSec": 30
     },
     "schema": [
       {
@@ -41,18 +39,6 @@
         "max": 600,
         "step": 10,
         "defaultValue": 30
-      },
-      {
-        "key": "autoMountAll",
-        "type": "boolean",
-        "label": "Auto-mount configured drives on login",
-        "defaultValue": true
-      },
-      {
-        "key": "mountRoot",
-        "type": "string",
-        "label": "Default mount root directory",
-        "defaultValue": "~/Cloud"
       }
     ]
   }
