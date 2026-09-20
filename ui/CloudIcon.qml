@@ -19,29 +19,36 @@ Item {
 
   Text {
     id: cloudGlyph
+    z: 0
     anchors.centerIn: parent
     text: root.active ? "󰅠" : "󰅟"
     color: root.hasError ? Color.urgent : root.color
     font.family: root.fontFamily
     font.pixelSize: root.iconSize
-    opacity: root.active ? 1.0 : 0.6
+    opacity: root.busy ? (root.active ? 0.5 : 0.3) : (root.active ? 1.0 : 0.6)
+
+    Behavior on opacity {
+      NumberAnimation { duration: 150 }
+    }
   }
 
-  // Spinning sync indicator when busy
+  // Spinning sync indicator in front when busy
   Text {
     id: spinGlyph
+    z: 1
     visible: root.busy
     anchors.centerIn: parent
     text: "󰑐"
     color: Color.accent
     font.family: root.fontFamily
-    font.pixelSize: root.iconSize * 0.8
+    font.pixelSize: root.iconSize * 0.85
+    transformOrigin: Item.Center
 
-    NumberAnimation on rotation {
+    RotationAnimation on rotation {
       running: root.busy
       from: 0
       to: 360
-      duration: 1200
+      duration: 1000
       loops: Animation.Infinite
     }
   }
