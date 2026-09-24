@@ -1,6 +1,7 @@
 """Command Line Interface and Interactive Setup for ODrive."""
 
 import argparse
+import getpass
 import json
 import os
 import shutil
@@ -210,6 +211,13 @@ def open_drive_folder(remote_name: str = ""):
 
 
 
+def read_client_secret() -> str:
+    """Read an OAuth client secret from stdin, or prompt without echo on a terminal."""
+    if sys.stdin.isatty():
+        return getpass.getpass("OAuth client secret: ").strip()
+    return sys.stdin.readline().strip()
+
+
 def claim_session_marker() -> bool:
     """Return True for the first caller this login session; the runtime dir is cleared on logout."""
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
@@ -291,19 +299,24 @@ def main():
     p_oauth.add_argument("remote", help="Remote name")
     p_oauth.add_argument("provider", help="Provider ID (drive, onedrive, dropbox, box, pcloud)")
     p_oauth.add_argument("--client-id", default="", help="Custom OAuth Client ID")
-    p_oauth.add_argument("--client-secret", default="", help="Custom OAuth Client Secret")
+    # Secrets are never accepted as arguments: argv is visible to every local user
+    p_oauth.add_argument(
+        "--client-secret-stdin",
+        action="store_true",
+        help="Read a custom OAuth client secret from stdin (prompts when stdin is a terminal)",
+    )
     p_oauth.add_argument("--mount-path", default="", help="Custom mount directory path")
     p_oauth.add_argument("--mount", action="store_true", help="Mount immediately after configuration")
 
     # add-credentials
-    p_cred = subparsers.add_parser("add-credentials", help="Create a credentials-based remote (Nextcloud, WebDAV, S3, etc.)")
+    p_cred = subparsers.add_parser(
+        "add-credentials",
+        help="Create a credentials-based remote (Nextcloud, WebDAV, S3, etc.)",
+        description="Reads the options (url, user, pass, etc.) as a JSON object from stdin, "
+        "so credentials never appear in the process list.",
+    )
     p_cred.add_argument("remote", help="Remote name")
     p_cred.add_argument("provider", help="Provider ID (nextcloud, webdav, s3, protondrive)")
-    p_cred.add_argument(
-        "--options",
-        default=None,
-        help="JSON string with options (url, user, pass, etc.); defaults to $ODRIVE_OPTIONS, which keeps secrets out of the process list",
-    )
     p_cred.add_argument("--mount-path", default="", help="Custom mount directory path")
     p_cred.add_argument("--no-test", action="store_true", help="Skip connection testing")
     p_cred.add_argument("--mount", action="store_true", help="Mount immediately after configuration")
@@ -442,7 +455,7 @@ def main():
             args.remote,
             args.provider,
             client_id=args.client_id,
-            client_secret=args.client_secret,
+            client_secret=read_client_secret() if args.client_secret_stdin else "",
             mount_path=getattr(args, "mount_path", ""),
         )
         if ok:
@@ -469,11 +482,17 @@ def main():
             sys.exit(1)
 
     elif args.command == "add-credentials":
-        raw_options = args.options if args.options is not None else os.environ.get("ODRIVE_OPTIONS", "{}")
+        if sys.stdin.isatty():
+            print("Paste the options as JSON, then press Ctrl-D:", file=sys.stderr)
+        raw_options = sys.stdin.read().strip()
         try:
             options = json.loads(raw_options) if raw_options else {}
         except json.JSONDecodeError as e:
-            print(json.dumps({"ok": False, "error": f"Invalid options JSON: {e}"}))
+            # The decoder message only holds a position, never the input itself
+            print(json.dumps({"ok": False, "error": f"Invalid options JSON on stdin: {e.msg} (char {e.pos})"}))
+            sys.exit(1)
+        if not isinstance(options, dict):
+            print(json.dumps({"ok": False, "error": "Options on stdin must be a JSON object"}))
             sys.exit(1)
         ok, res = manager.add_remote_credentials(
             args.remote,

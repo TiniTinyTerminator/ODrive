@@ -22,6 +22,7 @@ from .config import (
     save_config,
 )
 from .providers import PROVIDERS, detect_provider
+from .rclone_rc import config_create, is_secret_key, redact
 
 # rclone reports this total/free size through statfs when a backend can't report its quota
 UNKNOWN_QUOTA_BYTES = 1 << 50
@@ -111,21 +112,6 @@ class DriveManager:
             )
         except (subprocess.SubprocessError, OSError):
             pass
-
-    def _obscure(self, secret: str) -> Optional[str]:
-        """Obscure a password with rclone, passing it on stdin so it never shows up in the process list."""
-        try:
-            res = subprocess.run(
-                [self.rclone_bin, "obscure", "-"],
-                input=secret,
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-        except (subprocess.SubprocessError, OSError):
-            return None
-        return res.stdout.strip() if res.returncode == 0 and res.stdout.strip() else None
 
     def list_remotes(self) -> Dict[str, dict]:
         """Fetch all remotes configured in rclone."""
@@ -788,70 +774,60 @@ class DriveManager:
         if clean_name in existing:
             return False, f"A remote named '{clean_name}' already exists. Please choose a different name."
 
-        cmd = [self.rclone_bin, "authorize", rclone_type]
-        if client_id and client_secret:
-            cmd.extend([client_id, client_secret])
+        # A custom OAuth client goes to rclone through its RCLONE_<TYPE>_CLIENT_* variables:
+        # the environment is readable only by this user, unlike argv, which every user can see.
+        env = os.environ.copy()
+        if client_id:
+            env[f"RCLONE_{rclone_type.upper()}_CLIENT_ID"] = client_id
+        if client_secret:
+            env[f"RCLONE_{rclone_type.upper()}_CLIENT_SECRET"] = client_secret
+        secrets = [client_secret]
 
         try:
             proc = subprocess.Popen(
-                cmd,
+                [self.rclone_bin, "authorize", rclone_type],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=env,
             )
             try:
                 stdout, stderr = proc.communicate(timeout=timeout_sec)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.communicate()
                 return False, "Authorization timed out. Please try again."
 
             if proc.returncode != 0:
-                err = stderr.strip() or stdout.strip() or "Authorization process failed"
+                # stdout is where rclone prints the token, so only stderr may be shown
+                err = redact(stderr.strip(), secrets) or "Authorization process failed"
                 return False, f"OAuth authorization failed: {err}"
 
             # Extract JSON token from stdout
             token_match = re.search(r"\{[\s\S]*\"access_token\"[\s\S]*\}", stdout)
             if not token_match:
-                token_match = re.search(r"\{[\s\S]*\"[a-zA-Z0-9_-]+\":\s*\"[\s\S]+\"[\s\S]*\}", stdout)
-
-            if not token_match:
-                return False, f"Did not receive a valid authentication token from browser authorization"
+                return False, "Did not receive a valid authentication token from browser authorization"
 
             token_str = token_match.group(0).strip()
+            secrets.append(token_str)
 
-            # Create remote via rclone config create
-            create_cmd = [
-                self.rclone_bin,
-                "config",
-                "create",
-                clean_name,
-                rclone_type,
-                "token",
-                token_str,
-                "config_is_local",
-                "false",
-            ]
+            parameters = {"token": token_str, "config_is_local": "false"}
             if client_id:
-                create_cmd.extend(["client_id", client_id])
+                parameters["client_id"] = client_id
             if client_secret:
-                create_cmd.extend(["client_secret", client_secret])
+                parameters["client_secret"] = client_secret
 
             # OneDrive requires drive_id and drive_type to function
             if rclone_type == "onedrive":
                 drive_id, drive_type = resolve_onedrive_drive(token_str)
                 if drive_id:
-                    create_cmd.extend(["drive_id", drive_id, "drive_type", drive_type or "personal"])
+                    parameters["drive_id"] = drive_id
+                    parameters["drive_type"] = drive_type or "personal"
 
-            create_res = subprocess.run(
-                create_cmd,
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            if create_res.returncode != 0:
-                err = create_res.stderr.strip() or create_res.stdout.strip()
-                return False, f"Failed to save remote configuration: {err}"
+            ok, err = config_create(self.rclone_bin, clean_name, rclone_type, parameters)
+            if not ok:
+                return False, f"Failed to save remote configuration: {redact(err, secrets)}"
 
             if mount_path:
                 cfg = load_config()
@@ -896,14 +872,8 @@ class DriveManager:
         if clean_name in existing:
             return False, f"A remote named '{clean_name}' already exists. Please choose a different name."
 
-        # Passwords are pre-obscured via stdin and passed with --no-obscure so plaintext never lands in argv
-        create_args = [self.rclone_bin, "config", "create", "--no-obscure", clean_name, rclone_type]
-
-        def obscured(secret: str) -> str:
-            value = self._obscure(secret)
-            if value is None:
-                raise ValueError("Failed to obscure password with rclone")
-            return value
+        # Everything goes to rclone over the private rc channel, never argv; rclone obscures passwords itself
+        parameters: Dict[str, str] = {}
 
         if provider_id == "nextcloud" or (rclone_type == "webdav" and options.get("vendor") == "nextcloud"):
             url = options.get("url", "").strip()
@@ -923,16 +893,7 @@ class DriveManager:
             if not ("/remote.php/dav/files/" in url or url.endswith("/remote.php/webdav")):
                 url = url.rstrip("/") + f"/remote.php/dav/files/{user}"
 
-            try:
-                obscured_pass = obscured(password)
-            except ValueError as e:
-                return False, str(e)
-            create_args.extend([
-                "url", url,
-                "vendor", "nextcloud",
-                "user", user,
-                "pass", obscured_pass,
-            ])
+            parameters.update({"url": url, "vendor": "nextcloud", "user": user, "pass": password})
 
         elif rclone_type == "webdav":
             url = options.get("url", "").strip()
@@ -941,66 +902,45 @@ class DriveManager:
             if not url.startswith("http://") and not url.startswith("https://"):
                 url = "https://" + url
 
-            create_args.extend(["url", url])
-            if options.get("vendor"):
-                create_args.extend(["vendor", options["vendor"]])
-            if options.get("user"):
-                create_args.extend(["user", options["user"]])
-            if options.get("pass"):
-                try:
-                    create_args.extend(["pass", obscured(options["pass"])])
-                except ValueError as e:
-                    return False, str(e)
+            parameters["url"] = url
+            for key in ("vendor", "user", "pass"):
+                if options.get(key):
+                    parameters[key] = str(options[key])
 
         elif rclone_type == "s3":
-            prov = options.get("provider", "Other")
-            create_args.extend(["provider", prov])
-            if options.get("endpoint"):
-                create_args.extend(["endpoint", options["endpoint"].strip()])
-            if options.get("access_key_id"):
-                create_args.extend(["access_key_id", options["access_key_id"].strip()])
-            if options.get("secret_access_key"):
-                create_args.extend(["secret_access_key", options["secret_access_key"].strip()])
-            if options.get("region"):
-                create_args.extend(["region", options["region"].strip()])
+            parameters["provider"] = options.get("provider", "Other")
+            for key in ("endpoint", "access_key_id", "secret_access_key", "region"):
+                if options.get(key):
+                    parameters[key] = str(options[key]).strip()
 
         elif rclone_type == "protondrive":
             username = options.get("username", "").strip()
             password = options.get("password", "").strip()
             if not username or not password:
                 return False, "Username and password are required"
-            try:
-                create_args.extend(["username", username, "password", obscured(password)])
-            except ValueError as e:
-                return False, str(e)
+            parameters.update({"username": username, "password": password})
             if options.get("2fa"):
-                create_args.extend(["2fa", options["2fa"].strip()])
+                parameters["2fa"] = str(options["2fa"]).strip()
 
         else:
-            # Arbitrary options may hold plaintext passwords, so let rclone obscure them itself
-            create_args.remove("--no-obscure")
             for k, v in options.items():
                 if v is not None and str(v) != "":
-                    create_args.extend([k, str(v)])
+                    parameters[k] = str(v)
+
+        # Keep credential values out of any message shown to the user
+        secrets = [v for k, v in parameters.items() if is_secret_key(k)]
 
         try:
-            res = subprocess.run(
-                create_args,
-                capture_output=True,
-                text=True,
-                timeout=12,
-                check=False,
-            )
-            if res.returncode != 0:
-                err = res.stderr.strip() or res.stdout.strip()
-                return False, f"Failed to configure remote: {err}"
+            ok, err = config_create(self.rclone_bin, clean_name, rclone_type, parameters)
+            if not ok:
+                return False, f"Failed to configure remote: {redact(err, secrets)}"
 
             if test_connection:
                 ok, test_err = self.test_remote(clean_name, timeout_sec=10)
                 if not ok:
                     # Clean up failed remote
                     self.remove_remote(clean_name)
-                    return False, f"Connection failed: {test_err}"
+                    return False, f"Connection failed: {redact(test_err, secrets)}"
 
             if mount_path:
                 cfg = load_config()

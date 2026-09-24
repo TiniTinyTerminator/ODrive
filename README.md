@@ -135,7 +135,18 @@ odrive set-path MyDrive ~/Cloud/Work
 # Remove a cloud drive configuration
 odrive remove MyDrive          # asks for confirmation
 odrive remove MyDrive --yes    # no prompt
+
+# Add drives without the widget. Secrets are only accepted on stdin, never as
+# arguments, because every local user can read other processes' arguments.
+odrive add-credentials MyDav webdav < webdav.json   # {"url": "...", "user": "...", "pass": "..."}
+odrive add-oauth MyDrive drive                      # opens the browser
+odrive add-oauth MyDrive drive --client-id ID --client-secret-stdin   # prompts for the secret
 ```
+
+ODrive hands credentials and OAuth tokens to rclone through a private remote-control
+socket (in a `0700` temporary directory) instead of command-line arguments. A custom
+OAuth client secret reaches `rclone authorize` through its environment, which only
+your user can read.
 
 ---
 

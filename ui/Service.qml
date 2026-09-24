@@ -151,15 +151,15 @@ Item {
     authSuccess = false
     authSuccessMessage = ""
 
-    authProc.environment = ({ ODRIVE_OPTIONS: null })
     var args = [odriveCli, "add-oauth", remoteName, providerId]
     if (clientId && clientId !== "") {
       args.push("--client-id")
       args.push(clientId)
     }
+    var stdinPayload = ""
     if (clientSecret && clientSecret !== "") {
-      args.push("--client-secret")
-      args.push(clientSecret)
+      args.push("--client-secret-stdin")
+      stdinPayload = clientSecret + "\n"
     }
     if (mountPath && mountPath !== "") {
       args.push("--mount-path")
@@ -168,6 +168,15 @@ Item {
     if (mountAfter) {
       args.push("--mount")
     }
+    _startAuth(args, stdinPayload)
+  }
+
+  // Secrets reach the CLI on stdin only: argv is readable by every local user via /proc.
+  property string _authStdin: ""
+
+  function _startAuth(args, stdinPayload) {
+    _authStdin = stdinPayload
+    authProc.stdinEnabled = true
     authProc.command = args
     authProc.running = true
   }
@@ -189,8 +198,6 @@ Item {
     authSuccess = false
     authSuccessMessage = ""
 
-    // Secrets travel via the environment, not argv, so they don't show up in the process list
-    authProc.environment = ({ ODRIVE_OPTIONS: JSON.stringify(optionsDict) })
     var args = [odriveCli, "add-credentials", remoteName, providerId]
     if (mountPath && mountPath !== "") {
       args.push("--mount-path")
@@ -199,8 +206,7 @@ Item {
     if (mountAfter) {
       args.push("--mount")
     }
-    authProc.command = args
-    authProc.running = true
+    _startAuth(args, JSON.stringify(optionsDict))
   }
 
   function renameRemote(remoteName, newName, newPath) {
@@ -354,6 +360,13 @@ Item {
     id: authProc
     command: []
     running: false
+    stdinEnabled: true
+    onStarted: {
+      if (root._authStdin !== "") write(root._authStdin)
+      root._authStdin = ""
+      // Closing stdin sends EOF, so the CLI never waits for more input
+      stdinEnabled = false
+    }
     stdout: StdioCollector {
       onStreamFinished: {
         var raw = this.text.trim()
@@ -389,6 +402,7 @@ Item {
       }
     }
     onExited: {
+      root._authStdin = ""
       root.authBusy = false
       root.authWaiting = false
     }
