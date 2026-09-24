@@ -62,6 +62,7 @@ Column {
 
         Text {
           Layout.fillWidth: true
+          textFormat: Text.PlainText
           text: modelData.name
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall

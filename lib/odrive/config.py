@@ -33,6 +33,27 @@ def get_state_dir() -> Path:
     return base / "odrive"
 
 
+def ensure_private_dir(path: Path) -> Path:
+    """Create a directory only this user can read; tighten it if it already exists."""
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
+
+
+def open_private(path: Path, mode: str = "w"):
+    """Open a file for writing with 0600 permissions, whatever the umask."""
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if "a" in mode else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    return os.fdopen(fd, mode, encoding="utf-8")
+
+
 def _migrate_legacy_settings() -> dict:
     """Read legacy settings from ~/.config/omarchy-cloud/settings.conf if present."""
     legacy_file = Path.home() / ".config" / "omarchy-cloud" / "settings.conf"
@@ -85,10 +106,10 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     config_dir = get_config_dir()
-    config_dir.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(config_dir)
     config_file = config_dir / "config.json"
     temp_file = config_dir / "config.json.tmp"
-    with open(temp_file, "w", encoding="utf-8") as f:
+    with open_private(temp_file) as f:
         json.dump(cfg, f, indent=2)
     os.replace(temp_file, config_file)
 

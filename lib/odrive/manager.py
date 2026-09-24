@@ -14,15 +14,17 @@ import urllib.error
 import urllib.request
 
 from .config import (
+    ensure_private_dir,
     get_config_dir,
     get_mount_path_for_remote,
     get_mount_root,
     get_state_dir,
     load_config,
+    open_private,
     save_config,
 )
 from .providers import PROVIDERS, detect_provider
-from .rclone_rc import config_create, is_secret_key, redact
+from .rclone_rc import config_create, die_with_parent, is_secret_key, redact
 
 # rclone reports this total/free size through statfs when a backend can't report its quota
 UNKNOWN_QUOTA_BYTES = 1 << 50
@@ -31,6 +33,24 @@ UNKNOWN_QUOTA_BYTES = 1 << 50
 def _unescape_mount_field(field: str) -> str:
     """Decode the octal escapes /proc/mounts uses for spaces, tabs and backslashes."""
     return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+# C0 controls (bar tab/newline), DEL and C1 controls: what a terminal would act on
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def neutralize_controls(text: str) -> str:
+    """Render control characters visibly, as rclone does for names (ESC -> U+241B).
+
+    Mount logs contain cloud file names, which on Drive, Dropbox, WebDAV, S3 and Proton can
+    hold raw escape sequences; printed as-is they would drive the user's terminal.
+    """
+    def picture(m: "re.Match") -> str:
+        code = ord(m.group(0))
+        if code < 0x20:
+            return chr(0x2400 + code)
+        return "\u2421" if code == 0x7F else f"\\x{code:02x}"
+    return _CONTROL_CHARS_RE.sub(picture, text)
 
 
 def _is_plausible_quota(data: dict) -> bool:
@@ -62,7 +82,8 @@ class DriveManager:
         self.rclone_bin = shutil.which("rclone")
         self.fusermount_bin = shutil.which("fusermount3") or shutil.which("fusermount")
         self.state_dir = get_state_dir()
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        # Mount logs list cloud file names, so keep the state directory private
+        ensure_private_dir(self.state_dir)
         self.cache_file = self.state_dir / "quota_cache.json"
 
     def is_installed(self) -> bool:
@@ -220,7 +241,7 @@ class DriveManager:
 
     def _save_quota_cache(self, cache: dict) -> None:
         try:
-            with open(self.cache_file, "w", encoding="utf-8") as f:
+            with open_private(self.cache_file) as f:
                 json.dump(cache, f, indent=2)
         except OSError:
             pass
@@ -423,6 +444,11 @@ class DriveManager:
         cache_age = cfg.get("cache_max_age", "24h")
 
         log_file = self.state_dir / f"mount_{remote_name}.log"
+        # rclone would create the log with the umask's permissions; create it private first
+        try:
+            open_private(log_file, "a").close()
+        except OSError:
+            pass
 
         cmd = [
             self.rclone_bin,
@@ -468,6 +494,7 @@ class DriveManager:
                                 break
                         if not err_msg and lines:
                             err_msg = lines[-1]
+                        err_msg = neutralize_controls(err_msg)
                 except Exception:
                     pass
 
@@ -624,6 +651,9 @@ class DriveManager:
             return False, "New name cannot be empty"
         if clean_name != "".join(c for c in clean_name if c.isalnum() or c in ("-", "_")):
             return False, "Names may only contain letters, digits, '-' and '_'"
+        # rclone rejects names starting with '-' (they would read as command-line flags)
+        if clean_name.startswith("-"):
+            return False, "Names cannot start with '-'"
         # rclone's rename prompt reads a menu selection, so a digits-only name would pick the wrong remote
         if remote_name.isdigit() or clean_name.isdigit():
             return False, "Names cannot consist of digits only"
@@ -647,11 +677,14 @@ class DriveManager:
         old_mount_dir = get_mount_path_for_remote(remote_name)
 
         # rclone has no 'config rename' subcommand, so drive its interactive menu:
-        # r) Rename remote -> existing name -> new name -> q) Quit
+        # r) Rename remote -> existing name -> new name. Input deliberately ends there: if rclone
+        # re-prompts for any reason it hits EOF and changes nothing, rather than consuming further
+        # lines as answers (a trailing "q" used to become the new name). A successful rename is
+        # saved before rclone returns to the menu, so the EOF exit status is expected and ignored.
         try:
             subprocess.run(
                 [self.rclone_bin, "config"],
-                input=f"r\n{remote_name}\n{clean_name}\nq\n",
+                input=f"r\n{remote_name}\n{clean_name}\n",
                 capture_output=True,
                 text=True,
                 timeout=20,
@@ -791,6 +824,8 @@ class DriveManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 env=env,
+                # Cancelling kills odrive; authorize must not linger on the OAuth callback port
+                preexec_fn=die_with_parent(),
             )
             try:
                 stdout, stderr = proc.communicate(timeout=timeout_sec)
@@ -1104,7 +1139,7 @@ class DriveManager:
         try:
             with open(log_file, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
-                return "".join(lines[-max_lines:])
+                return neutralize_controls("".join(lines[-max_lines:]))
         except OSError as e:
             return f"Error reading log: {e}"
 

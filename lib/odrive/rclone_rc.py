@@ -6,11 +6,13 @@ body over a unix socket. The socket lives in a fresh 0700 directory, so only the
 current user can connect to it.
 """
 
+import ctypes
 import http.client
 import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -19,6 +21,25 @@ from typing import Iterable, Optional, Tuple
 
 _STARTUP_TIMEOUT_SEC = 10.0
 _REQUEST_TIMEOUT_SEC = 60.0
+_PR_SET_PDEATHSIG = 1  # from <linux/prctl.h>
+
+
+def die_with_parent():
+    """Return a preexec_fn making the kernel SIGTERM the child when odrive exits, however it exits.
+
+    Without this, killing odrive (the widget's Cancel, or SIGKILL) orphans `rclone authorize`,
+    which keeps holding the OAuth callback port, and `rclone rcd`, an unauthenticated rc server.
+    """
+    parent = os.getpid()
+
+    def preexec() -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM)
+        # The parent may have died between fork and prctl, in which case no signal would come
+        if os.getppid() != parent:
+            os._exit(1)
+
+    return preexec
 
 
 class RcError(Exception):
@@ -55,6 +76,7 @@ class RcloneRC:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                preexec_fn=die_with_parent(),
             )
             self._wait_until_ready()
         except BaseException:

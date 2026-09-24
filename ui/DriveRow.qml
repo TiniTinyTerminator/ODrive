@@ -116,6 +116,7 @@ CursorSurface {
           spacing: Style.space(6)
 
           Text {
+            textFormat: Text.PlainText
             text: root.drive ? root.drive.name : ""
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -136,6 +137,7 @@ CursorSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           text: root.drive ? root.drive.mountPath : ""
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption - Style.space(2)
@@ -192,6 +194,7 @@ CursorSurface {
 
       Text {
         Layout.fillWidth: true
+        textFormat: Text.PlainText
         text: "Remove " + (root.drive ? root.drive.name : "") + "? This deletes its rclone configuration."
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption - Style.space(1)
@@ -305,7 +308,7 @@ CursorSurface {
           onAccepted: { if (root.hasEdits) root.applyEdits() }
           // Letters, digits, '-' and '_' are what rclone remote names allow here
           onTextEdited: {
-            var cleaned = text.replace(/[^A-Za-z0-9_-]/g, "")
+            var cleaned = text.replace(/[^A-Za-z0-9_-]/g, "").replace(/^-+/, "")
             if (cleaned !== text) text = cleaned
             // Keep the suggested path in step with the name until the path is edited by hand
             if (!root.pathEdited && !root.hasCustomPath) {

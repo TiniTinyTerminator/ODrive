@@ -5,6 +5,7 @@ import getpass
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -234,7 +235,13 @@ def claim_session_marker() -> bool:
     return True
 
 
+def _exit_on_sigterm(signum, _frame):
+    # Raise SystemExit so context managers (the private rclone rc server, its temp dir) clean up
+    sys.exit(128 + signum)
+
+
 def main():
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
     parser = argparse.ArgumentParser(
         prog="odrive",
         description="Unified Cloud Drive Manager for Omarchy Linux.",

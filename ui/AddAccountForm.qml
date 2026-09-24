@@ -161,6 +161,7 @@ Item {
 
         Text {
           Layout.fillWidth: true
+          textFormat: Text.PlainText
           text: root.backend ? root.backend.authSuccessMessage : "Drive connected successfully!"
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -196,6 +197,7 @@ Item {
 
         Text {
           Layout.fillWidth: true
+          textFormat: Text.PlainText
           text: root.backend ? root.backend.authError : ""
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption - Style.space(1)
