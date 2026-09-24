@@ -85,6 +85,20 @@ class DriveManager:
         # Mount logs list cloud file names, so keep the state directory private
         ensure_private_dir(self.state_dir)
         self.cache_file = self.state_dir / "quota_cache.json"
+        self._tighten_existing_files()
+
+    def _tighten_existing_files(self) -> None:
+        """Make files written by older versions private too, not only files written from now on."""
+        config_dir = get_config_dir()
+        if config_dir.is_dir():
+            ensure_private_dir(config_dir)
+        paths = list(self.state_dir.glob("mount_*.log")) + [config_dir / "config.json", self.cache_file]
+        for path in paths:
+            try:
+                if path.is_file() and path.stat().st_mode & 0o077:
+                    os.chmod(path, 0o600)
+            except OSError:
+                pass
 
     def is_installed(self) -> bool:
         return self.rclone_bin is not None
