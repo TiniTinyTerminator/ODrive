@@ -150,6 +150,28 @@ your user can read.
 
 ---
 
+## 👀 Preview Mode (for reviews and demos)
+
+Preview mode runs the whole widget on realistic sample data, so ODrive can be reviewed or demoed without rclone, cloud accounts, or any side effects. Nothing is mounted, and neither rclone, your ODrive config nor the filesystem is touched. The only thing that changes is a private state file in `$XDG_RUNTIME_DIR`.
+
+Turn it on in any of these ways:
+
+- **Plugin setting:** enable *Preview mode* in the ODrive widget settings.
+- **Environment:** start the shell with `ODRIVE_PREVIEW=1`.
+- **CLI:** `odrive --preview <command>`, e.g. `odrive --preview status`.
+
+Everything behaves as it would for real: mounting, unmounting, renaming, removing and adding drives (the add form fakes the browser sign-in), with the same validation messages. The sample data covers every state the widget can show: mounted and unmounted drives, a quota bar above 90%, and `Archive-S3`, a drive that always fails to mount so the error state can be reviewed too. The panel subtitle and bar tooltip say *Preview*, so screenshots can't pass for real drives.
+
+```bash
+odrive --preview status          # sample drives
+odrive --preview mount Archive-S3  # always fails, on purpose
+odrive preview-reset             # restore the sample data
+```
+
+No credentials are kept in preview mode: the add forms check that required fields are filled, then discard the values.
+
+---
+
 ## ⚙️ Configuration
 
 Settings are saved in `~/.config/odrive/config.json`:
@@ -207,6 +229,7 @@ ODrive/
 │       ├── cli.py           # CLI subcommands & table formatting
 │       ├── config.py        # Settings management & custom mount paths
 │       ├── manager.py       # Core rclone, mount, unmount & quota engine
+│       ├── preview.py       # Preview mode: sample-data stand-in for the manager
 │       └── providers.py     # Supported cloud providers & metadata
 ├── ui/
 │   ├── Panel.qml            # Main bar widget popout panel & multi-view manager

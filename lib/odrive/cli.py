@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .config import get_mount_path_for_remote, get_mount_root, load_config, save_config
 from .manager import DriveManager
+from .preview import PreviewManager, is_preview_requested
 from .providers import PROVIDERS
 
 
@@ -219,12 +220,12 @@ def read_client_secret() -> str:
     return sys.stdin.readline().strip()
 
 
-def claim_session_marker() -> bool:
+def claim_session_marker(name: str = "odrive-automounted") -> bool:
     """Return True for the first caller this login session; the runtime dir is cleared on logout."""
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime_dir:
         return True
-    marker = Path(runtime_dir) / "odrive-automounted"
+    marker = Path(runtime_dir) / name
     try:
         fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
@@ -246,7 +247,15 @@ def main():
         prog="odrive",
         description="Unified Cloud Drive Manager for Omarchy Linux.",
     )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Use sample data instead of rclone: nothing is mounted or changed (also ODRIVE_PREVIEW=1)",
+    )
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
+
+    # preview-reset
+    subparsers.add_parser("preview-reset", help="Restore the preview-mode sample data")
 
     # status
     p_status = subparsers.add_parser("status", help="Show status of cloud drives")
@@ -349,7 +358,21 @@ def main():
 
 
     args = parser.parse_args()
-    manager = DriveManager()
+    preview = is_preview_requested(args.preview)
+    manager = PreviewManager() if preview else DriveManager()
+    # Preview state lives in its own file, so config reads and writes go through the manager
+    read_config = manager.load_config if preview else load_config
+    write_config = manager.save_config if preview else save_config
+
+    if args.command == "preview-reset":
+        PreviewManager().reset()
+        print("Preview sample data restored.")
+        return
+
+    if preview and args.command in ("setup", "add"):
+        print("The interactive setup wizard isn't available in preview mode; "
+              "use the widget, add-oauth or add-credentials.", file=sys.stderr)
+        sys.exit(1)
 
     if args.command == "status" or args.command is None:
         status = manager.get_status(include_recent=getattr(args, "json", False))
@@ -419,10 +442,13 @@ def main():
                 sys.exit(1)
 
     elif args.command == "open":
-        open_drive_folder(args.remote)
+        if preview:
+            print("Preview mode: nothing to open, no drives are mounted.")
+        else:
+            open_drive_folder(args.remote)
 
     elif args.command == "auto-mount":
-        if args.once and not claim_session_marker():
+        if args.once and not claim_session_marker("odrive-preview-automounted" if preview else "odrive-automounted"):
             print("Auto-mount already ran this session.")
             return
         results = manager.auto_mount()
@@ -438,7 +464,7 @@ def main():
         print(log_text)
 
     elif args.command == "config":
-        cfg = load_config()
+        cfg = read_config()
         if args.key:
             if args.value:
                 # Set key
@@ -450,7 +476,7 @@ def main():
                 elif val.isdigit():
                     val = int(val)
                 cfg[args.key] = val
-                save_config(cfg)
+                write_config(cfg)
                 print(f"Set {args.key} = {val}")
             else:
                 print(f"{args.key} = {cfg.get(args.key)}")

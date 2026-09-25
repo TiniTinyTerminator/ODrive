@@ -28,7 +28,8 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "refreshIntervalSec": 30
+      "refreshIntervalSec": 30,
+      "previewMode": false
     },
     "schema": [
       {
@@ -39,6 +40,12 @@
         "max": 600,
         "step": 10,
         "defaultValue": 30
+      },
+      {
+        "key": "previewMode",
+        "type": "boolean",
+        "label": "Preview mode: sample drives and files, nothing is mounted (for reviews and demos)",
+        "defaultValue": false
       }
     ]
   }

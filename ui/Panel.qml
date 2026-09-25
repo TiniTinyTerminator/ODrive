@@ -43,7 +43,7 @@ Panel {
   readonly property color barIconColor: statusColor
 
   // Subtitle in hero
-  readonly property string heroMeta: {
+  readonly property string _heroMetaBase: {
     if (!service.installed) return "rclone not installed"
     if (!hasDrives) return "No drives configured"
     if (service.allMounted) return "All " + service.totalDrives + " drives mounted"
@@ -51,8 +51,14 @@ Panel {
     return "All drives unmounted"
   }
 
+  // Label preview mode everywhere its sample data shows, so it can't pass for real drives
+  readonly property string heroMeta: service.previewMode ? "Preview · " + _heroMetaBase : _heroMetaBase
+  readonly property string barTooltipText: service.previewMode
+    ? _barTooltipTextBase.replace(/^ODrive:/, "ODrive (preview):")
+    : _barTooltipTextBase
+
   // Bar tooltip
-  readonly property string barTooltipText: {
+  readonly property string _barTooltipTextBase: {
     if (!service.installed) return "ODrive: rclone not installed"
     if (service.actionFailed && service.lastError !== "") return "ODrive: " + service.lastError
     if (!hasDrives) return "ODrive: Click to configure cloud drives"

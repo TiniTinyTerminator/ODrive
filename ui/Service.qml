@@ -15,6 +15,21 @@ Item {
     return localBin
   }
 
+  // Preview mode: the CLI serves sample data (see lib/odrive/preview.py), so the widget can
+  // be reviewed or demoed without rclone or accounts. Enabled by the plugin setting or ODRIVE_PREVIEW=1.
+  readonly property bool previewMode: {
+    var v = settings ? settings["previewMode"] : undefined
+    if (v === true || String(v).toLowerCase() === "true") return true
+    var env = String(Quickshell.env("ODRIVE_PREVIEW") || "").toLowerCase()
+    return env === "1" || env === "true" || env === "yes" || env === "on"
+  }
+  readonly property var cli: previewMode ? [odriveCli, "--preview"] : [odriveCli]
+  onPreviewModeChanged: {
+    drives = []
+    recentFiles = []
+    refresh()
+  }
+
   property bool installed: false
   property string version: ""
   property string mountRoot: "~/Cloud"
@@ -30,8 +45,16 @@ Item {
   property string lastError: ""
   // Whether lastError came from a status refresh (cleared by the next good refresh) or from an action
   property bool _statusError: false
-  // Something is wrong right now: drives the bar's error colour, cleared by the next good refresh
+  // A command just failed: drives the bar's error colour for one refresh interval,
+  // or until the next command succeeds. (A good status refresh can't clear it: every
+  // action triggers one immediately, which made the red state last milliseconds.)
   property bool actionFailed: false
+
+  Timer {
+    id: actionFailedTimer
+    interval: root.refreshIntervalSec * 1000
+    onTriggered: root.actionFailed = false
+  }
 
   readonly property int refreshIntervalSec: {
     var v = settings ? settings["refreshIntervalSec"] : undefined
@@ -57,6 +80,12 @@ Item {
       return
     }
 
+    // A refresh that started before preview mode was toggled belongs to the other mode
+    if ((parsed.preview === true) !== previewMode) {
+      Qt.callLater(refresh)
+      return
+    }
+
     installed = parsed.installed === true
     version = String(parsed.version || "")
     mountRoot = String(parsed.mountRoot || "~/Cloud")
@@ -73,7 +102,6 @@ Item {
       lastError = ""
       _statusError = false
     }
-    actionFailed = false
 
     // Apply drives with pending optimistic overrides cleared if reality caught up
     var rawDrives = parsed.drives || []
@@ -107,23 +135,27 @@ Item {
     drives = updated
 
     lastAction = targetState ? ("Mounting " + remoteName + "…") : ("Unmounting " + remoteName + "…")
-    runAction([odriveCli, targetState ? "mount" : "unmount", remoteName], remoteName)
+    runAction(root.cli.concat([targetState ? "mount" : "unmount", remoteName]), remoteName)
   }
 
   function mountAll() {
     if (actionBusy) return
     lastAction = "Mounting all cloud drives…"
-    runAction([odriveCli, "mount-all"])
+    runAction(root.cli.concat(["mount-all"]))
   }
 
   function unmountAll() {
     if (actionBusy) return
     lastAction = "Unmounting all cloud drives…"
-    runAction([odriveCli, "unmount-all"])
+    runAction(root.cli.concat(["unmount-all"]))
   }
 
   function openFolder(remoteName) {
-    var args = [odriveCli, "open"]
+    if (previewMode) {
+      showNotice("Preview mode: sample drives have no folders to open")
+      return
+    }
+    var args = root.cli.concat(["open"])
     if (remoteName && remoteName !== "") args.push(remoteName)
     Quickshell.execDetached(args)
   }
@@ -151,7 +183,7 @@ Item {
     authSuccess = false
     authSuccessMessage = ""
 
-    var args = [odriveCli, "add-oauth", remoteName, providerId]
+    var args = root.cli.concat(["add-oauth", remoteName, providerId])
     if (clientId && clientId !== "") {
       args.push("--client-id")
       args.push(clientId)
@@ -198,7 +230,7 @@ Item {
     authSuccess = false
     authSuccessMessage = ""
 
-    var args = [odriveCli, "add-credentials", remoteName, providerId]
+    var args = root.cli.concat(["add-credentials", remoteName, providerId])
     if (mountPath && mountPath !== "") {
       args.push("--mount-path")
       args.push(mountPath)
@@ -212,7 +244,7 @@ Item {
   function renameRemote(remoteName, newName, newPath) {
     if (actionBusy) return
     lastAction = "Renaming " + remoteName + " to " + newName + "…"
-    var args = [odriveCli, "rename", remoteName, newName]
+    var args = root.cli.concat(["rename", remoteName, newName])
     if (newPath !== undefined && newPath !== null) {
       args.push("--mount-path")
       args.push(newPath)
@@ -223,18 +255,34 @@ Item {
   function setRemoteMountPath(remoteName, newPath) {
     if (actionBusy) return
     lastAction = "Updating location for " + remoteName + "…"
-    runAction([odriveCli, "set-path", remoteName, newPath])
+    runAction(root.cli.concat(["set-path", remoteName, newPath]))
   }
 
   function setMountRoot(newRoot) {
     if (actionBusy) return
     lastAction = "Updating mount root…"
-    runAction([odriveCli, "set-root", newRoot])
+    runAction(root.cli.concat(["set-root", newRoot]))
   }
 
   function openFile(filePath) {
     if (!filePath || filePath === "") return
+    if (previewMode) {
+      showNotice("Preview mode: sample files can't be opened")
+      return
+    }
     Quickshell.execDetached(["xdg-open", filePath])
+  }
+
+  function showNotice(text) {
+    if (actionBusy) return
+    lastAction = text
+    noticeTimer.restart()
+  }
+
+  Timer {
+    id: noticeTimer
+    interval: 2500
+    onTriggered: if (!root.actionBusy) root.lastAction = ""
   }
 
   // Remote whose optimistic mount state belongs to the running action
@@ -253,7 +301,8 @@ Item {
   }
 
   function _cleanOutput(text) {
-    return String(text || "").replace(/\x1b\[[0-9;]*m/g, "").trim()
+    // Strip terminal colours and the CLI's leading ✓/✗ marks
+    return String(text || "").replace(/\x1b\[[0-9;]*m/g, "").replace(/^[✓✗]\s*/gm, "").trim()
   }
 
   function _finishAction(exitCode) {
@@ -269,9 +318,11 @@ Item {
       lastError = jsonMessage || err || out || "Command failed"
       _statusError = false
       actionFailed = true
+      actionFailedTimer.restart()
     } else if (!_statusError) {
       lastError = ""
       actionFailed = false
+      actionFailedTimer.stop()
     }
 
     // Drop the optimistic state either way; the refresh below shows what really happened
@@ -301,23 +352,23 @@ Item {
   function loadLog(remote) {
     logLoading = true
     currentLog = "Loading log…"
-    logProc.command = [odriveCli, "log", remote]
+    logProc.command = root.cli.concat(["log", remote])
     logProc.running = true
   }
 
   function removeRemote(remoteName) {
     if (actionBusy) return
     lastAction = "Removing " + remoteName + "…"
-    runAction([odriveCli, "remove", "--yes", remoteName])
+    runAction(root.cli.concat(["remove", "--yes", remoteName]))
   }
 
   function updateConfig(key, value) {
-    runAction([odriveCli, "config", key, String(value)])
+    runAction(root.cli.concat(["config", key, String(value)]))
   }
 
   Process {
     id: statusProc
-    command: [root.odriveCli, "status", "--json"]
+    command: root.cli.concat(["status", "--json"])
     running: false
     stdout: StdioCollector {
       onStreamFinished: {
@@ -420,6 +471,6 @@ Item {
   Component.onCompleted: {
     root.refresh()
     // Mounts on first shell start of the login session; the CLI skips it on later reloads
-    runAction([odriveCli, "auto-mount", "--once"])
+    runAction(root.cli.concat(["auto-mount", "--once"]))
   }
 }
