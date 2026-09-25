@@ -1,8 +1,14 @@
 # ODrive — Unified Cloud Drive Manager for Omarchy
 
 <p align="center">
+  <img src="preview.png" alt="ODrive panel open from the Omarchy bar, showing mounted drives with storage quotas and recent cloud files" width="100%">
+</p>
+
+<p align="center">
   <b>Seamlessly mount, monitor, and manage Google Drive, OneDrive, Dropbox, Nextcloud, and more on Omarchy Linux.</b>
 </p>
+
+<p align="center"><sub>Shown with <a href="#-preview-mode-for-reviews-and-demos">preview mode</a> sample data.</sub></p>
 
 ODrive is a native Omarchy desktop plugin and CLI tool that brings all your cloud storage accounts together under one unified interface. Powered by `rclone` and the Omarchy Quickshell desktop environment, ODrive gives you one-click mounting, storage quota tracking, recent file access, and seamless file manager integration.
 
