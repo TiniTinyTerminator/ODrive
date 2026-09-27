@@ -23,6 +23,10 @@ PLUGIN_DIR="$PLUGIN_PARENT/$PLUGIN_ID"
 BIN_DIR="$HOME/.local/bin"
 CLI_LINK="$BIN_DIR/odrive"
 DESKTOP_FILE="$HOME/.local/share/applications/odrive.desktop"
+# SHA-256 of the one odrive.desktop ODrive ever shipped (assets/odrive.desktop in
+# 0e4b0f4, removed in 090d0af with the `odrive gui` command it launched). Early
+# installers copied it verbatim, so only a byte-identical file is ODrive's.
+LEGACY_DESKTOP_SHA256="bc5c235dbf53b2a998dd25ab9fdc3eb182ebf233a5964088c57bbe5f6267099d"
 # Written into copies this script makes, so later runs can prove ownership
 MARKER=".odrive-install"
 # Everything a copy made by this script contains at its top level
@@ -136,8 +140,11 @@ cli_link_is_ours() {
   fi
 }
 
+# Only the exact file an early ODrive installer copied counts as ODrive's; any
+# other odrive.desktop, even one that runs odrive, is the user's and is kept.
 desktop_file_is_ours() {
-  [[ -f "$DESKTOP_FILE" && ! -L "$DESKTOP_FILE" ]] && grep -qiE '^Exec=.*odrive' "$DESKTOP_FILE"
+  [[ -f "$DESKTOP_FILE" && ! -L "$DESKTOP_FILE" ]] || return 1
+  [[ "$(sha256sum < "$DESKTOP_FILE" | cut -d' ' -f1)" == "$LEGACY_DESKTOP_SHA256" ]]
 }
 
 explain_foreign_plugin_dir() {
@@ -252,7 +259,7 @@ else
   echo "      The widget does not need it. Run the CLI as $PLUGIN_DIR/bin/odrive instead."
 fi
 
-# Clean up a legacy standalone desktop entry, if it is ODrive's
+# Clean up the desktop entry an early ODrive installer left, if unmodified
 if desktop_file_is_ours; then
   rm -f -- "$DESKTOP_FILE"
 fi
