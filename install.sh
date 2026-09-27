@@ -104,35 +104,60 @@ is_legacy_layout() {
   return 0
 }
 
-# Lists files in an installed copy that were added or changed since install,
-# one "added: <path>" / "changed: <path>" per line. Exit status:
-#   0  unchanged: every file is exactly as installed
-#   1  files were added or changed (listed)
+# Lists everything in an installed copy that was added or changed since
+# install, one "added: <path>" / "changed: <path>" per line (directories end
+# in "/"). Exit status:
+#   0  unchanged: every entry is exactly as installed
+#   1  entries were added or changed (listed)
 #   2  cannot verify (an older install recorded no file list, and this
 #      checkout has no git history to check it against)
 # The marker written at install time records every file's SHA-256. Copies
 # from older installers are checked against ODrive's git history instead:
-# each file's exact content must have been shipped at that path. Python
-# bytecode caches, regenerated at runtime, are ignored; missing files are
-# not user data and are ignored too.
+# each file's exact content must have been shipped at that path. Every
+# directory must contain an installed file, so added directories, even
+# empty ones, count as changes. Symlinks, FIFOs, sockets and devices are
+# never read and always count as changes. Only *.pyc files in a __pycache__
+# beside installed code are ignored, since Python regenerates them; missing
+# files are not user data and are ignored too.
 copy_changes() {
   python3 - "$1" "$SRC" "$MARKER" <<'PY'
-import hashlib, os, re, subprocess, sys
+import hashlib, os, re, stat, subprocess, sys
 
 root, src, marker = sys.argv[1:4]
 
 def installed_entries():
+    """Yield (kind, relpath) for everything in the copy: "dir", "file" (regular), or
+    "other" (symlink, FIFO, socket, device; never read, always user content)."""
     for dirpath, dirnames, filenames in os.walk(root):
         for d in list(dirnames):
-            if d == "__pycache__":
+            rel = os.path.relpath(os.path.join(dirpath, d), root)
+            if os.path.islink(os.path.join(dirpath, d)):
                 dirnames.remove(d)
-            elif os.path.islink(os.path.join(dirpath, d)):
-                dirnames.remove(d)  # a symlinked directory is user content
-                yield os.path.relpath(os.path.join(dirpath, d), root)
+                yield "other", rel
+            else:
+                yield "dir", rel
         for f in filenames:
             rel = os.path.relpath(os.path.join(dirpath, f), root)
-            if rel != marker and not f.endswith(".pyc"):
-                yield rel
+            if rel == marker:
+                continue
+            mode = os.lstat(os.path.join(dirpath, f)).st_mode
+            yield ("file" if stat.S_ISREG(mode) else "other"), rel
+
+def parents(paths):
+    """Every directory that contains one of the given file paths."""
+    out = set()
+    for p in paths:
+        d = os.path.dirname(p)
+        while d:
+            out.add(d)
+            d = os.path.dirname(d)
+    return out
+
+def is_bytecode(rel, known_dirs):
+    """A .pyc Python regenerates: directly inside __pycache__ next to installed code."""
+    d = os.path.dirname(rel)
+    return (rel.endswith(".pyc") and os.path.basename(d) == "__pycache__"
+            and (os.path.dirname(d) in known_dirs or os.path.dirname(d) == ""))
 
 def read(rel):
     with open(os.path.join(root, rel), "rb") as fh:
@@ -148,14 +173,10 @@ try:
 except OSError:
     pass
 
-changes = []
 if recorded:
-    for rel in sorted(installed_entries()):
-        path = os.path.join(root, rel)
-        if rel not in recorded:
-            changes.append("added: " + rel)
-        elif os.path.islink(path) or hashlib.sha256(read(rel)).hexdigest() != recorded[rel]:
-            changes.append("changed: " + rel)
+    known_paths = set(recorded)
+    def unchanged(rel, data):
+        return hashlib.sha256(data).hexdigest() == recorded[rel]
 else:
     try:
         top = subprocess.run(["git", "-C", src, "rev-parse", "--show-toplevel"],
@@ -175,15 +196,25 @@ else:
             known_paths.add(m.group(2))
     if not shipped:
         sys.exit(2)
-    for rel in sorted(installed_entries()):
-        path = os.path.join(root, rel)
-        if os.path.islink(path):
-            changes.append(("changed: " if rel in known_paths else "added: ") + rel)
-            continue
-        data = read(rel)
-        blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
-        if (rel, blob) not in shipped:
-            changes.append(("changed: " if rel in known_paths else "added: ") + rel)
+    def unchanged(rel, data):
+        return (rel, hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()) in shipped
+
+known_dirs = parents(known_paths)
+changes = []
+for kind, rel in sorted(installed_entries(), key=lambda e: e[1]):
+    if kind == "dir":
+        # Directories ODrive installs, plus bytecode caches Python makes beside its code
+        pycache = os.path.basename(rel) == "__pycache__" and (
+            os.path.dirname(rel) in known_dirs or os.path.dirname(rel) == "")
+        if rel not in known_dirs and not pycache:
+            changes.append("added: " + rel + "/")
+    elif kind == "file" and is_bytecode(rel, known_dirs):
+        continue
+    elif kind == "file" and rel in known_paths:
+        if not unchanged(rel, read(rel)):
+            changes.append("changed: " + rel)
+    else:
+        changes.append(("changed: " if rel in known_paths else "added: ") + rel)
 
 print("\n".join(changes))
 sys.exit(1 if changes else 0)
