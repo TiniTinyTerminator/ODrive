@@ -10,10 +10,12 @@
 # take effect immediately.
 #
 # Nothing is removed or replaced unless it provably belongs to ODrive: the
-# plugin directory must be a copy this script made (or an older version of
-# it made) or a symlink to an ODrive checkout, and ~/.local/bin/odrive must
-# be a symlink to ODrive's launcher. Anything else at those paths, such as a
-# git checkout or another program, is left alone and reported.
+# plugin directory must be a copy this script made whose files are all still
+# exactly as installed (or a symlink to an ODrive checkout, where only the
+# link is removed), and ~/.local/bin/odrive must be a symlink to ODrive's
+# launcher. Anything else at those paths, such as a git checkout, a copy with
+# files added or edited since install, or another program, is left alone and
+# reported.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -85,10 +87,8 @@ is_odrive_dir() {
   [[ -d "$1" && "$(manifest_id "$1")" == "$PLUGIN_ID" ]]
 }
 
-# A plain copy with exactly the files a copy install produces. Accepts copies
-# made before the marker existed, but never a git checkout or anything with
-# extra top-level content that could be someone's work.
-is_legacy_copy() {
+# Top-level layout check for copies made by installers older than the marker.
+is_legacy_layout() {
   local dir="$1" entry name allowed
   [[ -d "$dir" && ! -L "$dir" && ! -e "$dir/.git" ]] || return 1
   is_odrive_dir "$dir" || return 1
@@ -104,25 +104,136 @@ is_legacy_copy() {
   return 0
 }
 
+# Lists files in an installed copy that were added or changed since install,
+# one "added: <path>" / "changed: <path>" per line. Exit status:
+#   0  unchanged: every file is exactly as installed
+#   1  files were added or changed (listed)
+#   2  cannot verify (an older install recorded no file list, and this
+#      checkout has no git history to check it against)
+# The marker written at install time records every file's SHA-256. Copies
+# from older installers are checked against ODrive's git history instead:
+# each file's exact content must have been shipped at that path. Python
+# bytecode caches, regenerated at runtime, are ignored; missing files are
+# not user data and are ignored too.
+copy_changes() {
+  python3 - "$1" "$SRC" "$MARKER" <<'PY'
+import hashlib, os, re, subprocess, sys
+
+root, src, marker = sys.argv[1:4]
+
+def installed_entries():
+    for dirpath, dirnames, filenames in os.walk(root):
+        for d in list(dirnames):
+            if d == "__pycache__":
+                dirnames.remove(d)
+            elif os.path.islink(os.path.join(dirpath, d)):
+                dirnames.remove(d)  # a symlinked directory is user content
+                yield os.path.relpath(os.path.join(dirpath, d), root)
+        for f in filenames:
+            rel = os.path.relpath(os.path.join(dirpath, f), root)
+            if rel != marker and not f.endswith(".pyc"):
+                yield rel
+
+def read(rel):
+    with open(os.path.join(root, rel), "rb") as fh:
+        return fh.read()
+
+recorded = {}
+try:
+    with open(os.path.join(root, marker), encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            m = re.match(r"^([0-9a-f]{64})  (.+)$", line.rstrip("\n"))
+            if m:
+                recorded[m.group(2)] = m.group(1)
+except OSError:
+    pass
+
+changes = []
+if recorded:
+    for rel in sorted(installed_entries()):
+        path = os.path.join(root, rel)
+        if rel not in recorded:
+            changes.append("added: " + rel)
+        elif os.path.islink(path) or hashlib.sha256(read(rel)).hexdigest() != recorded[rel]:
+            changes.append("changed: " + rel)
+else:
+    try:
+        top = subprocess.run(["git", "-C", src, "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        log = subprocess.run(["git", "-C", src, "log", "--all", "--raw", "--no-renames",
+                              "--no-abbrev", "--format="],
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        sys.exit(2)
+    if os.path.realpath(top) != os.path.realpath(src):
+        sys.exit(2)
+    shipped, known_paths = set(), set()
+    for line in log.splitlines():
+        m = re.match(r"^:\d+ \d+ [0-9a-f]+ ([0-9a-f]+) \w+\t(.+)$", line)
+        if m:
+            shipped.add((m.group(2), m.group(1)))
+            known_paths.add(m.group(2))
+    if not shipped:
+        sys.exit(2)
+    for rel in sorted(installed_entries()):
+        path = os.path.join(root, rel)
+        if os.path.islink(path):
+            changes.append(("changed: " if rel in known_paths else "added: ") + rel)
+            continue
+        data = read(rel)
+        blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+        if (rel, blob) not in shipped:
+            changes.append(("changed: " if rel in known_paths else "added: ") + rel)
+
+print("\n".join(changes))
+sys.exit(1 if changes else 0)
+PY
+}
+
 # Classifies what is at the plugin destination:
 #   absent       nothing there
 #   source       it is this checkout itself (install.sh run from inside it)
-#   own-copy     a copy made by this script
+#   own-copy     a copy made by this script, with every file exactly as installed
+#   modified     a copy made by this script, but with files added or changed since
+#   unverified   a copy from an older installer that cannot be checked here
 #   odrive-link  a symlink to an ODrive checkout
-#   foreign      anything else: never touched
+#   foreign      anything else
+# Only own-copy and odrive-link are ever replaced or removed.
 classify_plugin_dir() {
+  local rc
   if [[ ! -e "$PLUGIN_DIR" && ! -L "$PLUGIN_DIR" ]]; then
     echo absent
   elif [[ "$(realpath -m "$PLUGIN_DIR")" == "$(realpath -m "$SRC")" && ! -L "$PLUGIN_DIR" ]]; then
     echo source
   elif [[ -L "$PLUGIN_DIR" ]]; then
     if is_odrive_dir "$PLUGIN_DIR"; then echo odrive-link; else echo foreign; fi
-  elif [[ -f "$PLUGIN_DIR/$MARKER" && ! -e "$PLUGIN_DIR/.git" ]] && is_odrive_dir "$PLUGIN_DIR"; then
-    echo own-copy
-  elif is_legacy_copy "$PLUGIN_DIR"; then
-    echo own-copy
+  elif [[ ! -e "$PLUGIN_DIR/.git" ]] && is_odrive_dir "$PLUGIN_DIR" \
+       && { [[ -f "$PLUGIN_DIR/$MARKER" ]] || is_legacy_layout "$PLUGIN_DIR"; }; then
+    rc=0
+    copy_changes "$PLUGIN_DIR" >/dev/null || rc=$?
+    case "$rc" in
+      0) echo own-copy ;;
+      1) echo modified ;;
+      *) echo unverified ;;
+    esac
   else
     echo foreign
+  fi
+}
+
+# Explains why a copy is kept, listing what was added or changed.
+explain_kept_copy() {
+  local kind="$1" changes
+  if [[ "$kind" == modified ]]; then
+    changes="$(copy_changes "$PLUGIN_DIR" || true)"
+    echo "$PLUGIN_DIR has files added or changed since ODrive installed it:" >&2
+    printf '%s\n' "$changes" | head -n 20 | sed 's/^/  /' >&2
+    [[ "$(printf '%s\n' "$changes" | wc -l)" -gt 20 ]] && echo "  …" >&2
+    echo "Move anything you want to keep out of it, delete the folder, then run this again." >&2
+  else
+    echo "$PLUGIN_DIR was installed by an older version of this script that did not record" >&2
+    echo "its files, and this checkout has no git history to check them against." >&2
+    echo "If it holds nothing of yours, delete the folder yourself, then run this again." >&2
   fi
 }
 
@@ -171,6 +282,10 @@ if [[ "$MODE" == "uninstall" ]]; then
       command -v omarchy >/dev/null 2>&1 && { omarchy plugin disable "$PLUGIN_ID" >/dev/null 2>&1 || true; }
       rm -f -- "$PLUGIN_DIR"   # the link only; the checkout it points to is kept
       echo "Removed the link $PLUGIN_DIR (the checkout it pointed to is untouched)" ;;
+    modified|unverified)
+      echo "Left $PLUGIN_DIR alone." >&2
+      explain_kept_copy "$kind"
+      status=1 ;;
     source|foreign)
       echo "Left $PLUGIN_DIR alone: it was not installed by this script." >&2
       if [[ -e "$PLUGIN_DIR/.git" ]]; then
@@ -213,10 +328,10 @@ if command -v omarchy-plugin-validate >/dev/null 2>&1; then
 fi
 
 kind="$(classify_plugin_dir)"
-if [[ "$kind" == foreign ]]; then
-  explain_foreign_plugin_dir
-  exit 1
-fi
+case "$kind" in
+  foreign) explain_foreign_plugin_dir; exit 1 ;;
+  modified|unverified) echo "Error: not replacing $PLUGIN_DIR." >&2; explain_kept_copy "$kind"; exit 1 ;;
+esac
 
 mkdir -p "$PLUGIN_PARENT" "$BIN_DIR"
 
@@ -237,8 +352,15 @@ else
   for entry in "${COPIED_ENTRIES[@]}"; do
     cp -r -- "$SRC/$entry" "$staging/"
   done
+  find "$staging" -name __pycache__ -type d -prune -exec rm -rf -- {} +
   chmod +x "$staging/bin/odrive"
-  printf 'Installed by ODrive install.sh from %s\n' "$SRC" > "$staging/$MARKER"
+  {
+    printf '# Installed by ODrive install.sh from %s\n' "$SRC"
+    printf '# SHA-256 of every installed file: reinstall and uninstall only remove this\n'
+    printf '# folder while it still matches, so files added or edited later are never lost.\n'
+    # The marker is being written by this redirect, so leave it out of its own list
+    (cd "$staging" && find . -type f ! -path "./$MARKER" -printf '%P\0' | sort -z | xargs -0 -r sha256sum --)
+  } > "$staging/$MARKER"
   chmod 755 "$staging"
   case "$kind" in
     own-copy) old="$(mktemp -d "$PLUGIN_PARENT/.$PLUGIN_ID.old.XXXXXX")"

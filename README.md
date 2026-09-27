@@ -63,7 +63,7 @@ cd ~/Projects/ODrive
 - `./install.sh --link`: Symlinks files directly into Omarchy (for active development).
 - `./install.sh --uninstall`: Cleanly disables the widget and removes installed files while preserving your cloud accounts and configs.
 
-The installer only removes or replaces what belongs to ODrive. The plugin folder must be a copy it made, or a `--link` symlink to an ODrive checkout (only the link is removed, never the checkout), and `~/.local/bin/odrive` must be a symlink to ODrive's launcher. Anything else at those paths, such as a git checkout from `omarchy plugin add`, another plugin, or an unrelated `odrive` command, is left untouched and reported. Running `./install.sh` from inside the installed plugin folder copies nothing.
+The installer only removes or replaces what belongs to ODrive. The plugin folder must be a copy it made whose files are all still exactly as installed (it records each file's SHA-256), or a `--link` symlink to an ODrive checkout (only the link is removed, never the checkout), and `~/.local/bin/odrive` must be a symlink to ODrive's launcher. If you added or edited files in an installed copy, the installer lists them and stops instead of deleting them. Anything else at those paths, such as a git checkout from `omarchy plugin add`, another plugin, or an unrelated `odrive` command, is left untouched and reported. Running `./install.sh` from inside the installed plugin folder copies nothing.
 
 ---
 
