@@ -229,16 +229,19 @@ ODrive/
 ├── install.sh               # Native installer script (copy, link, uninstall)
 ├── README.md                # Documentation & usage guide
 ├── LICENSE                  # MIT License
+├── preview.png              # Marketplace preview image
 ├── bin/
 │   └── odrive               # CLI executable entry point
 ├── lib/
 │   └── odrive/
 │       ├── __init__.py      # Package definition & version (1.0.0)
+│       ├── bounded.py       # Size-capped subprocess output and log reads
 │       ├── cli.py           # CLI subcommands & table formatting
 │       ├── config.py        # Settings management & custom mount paths
 │       ├── manager.py       # Core rclone, mount, unmount & quota engine
 │       ├── preview.py       # Preview mode: sample-data stand-in for the manager
-│       └── providers.py     # Supported cloud providers & metadata
+│       ├── providers.py     # Supported cloud providers & metadata
+│       └── rclone_rc.py     # Private rclone channel for credentials
 ├── ui/
 │   ├── Panel.qml            # Main bar widget popout panel & multi-view manager
 │   ├── Service.qml          # Background coordinator & Quickshell process runner
@@ -247,13 +250,26 @@ ODrive/
 │   ├── EmptyState.qml       # Onboarding screen with quick-connect buttons
 │   ├── RecentFiles.qml      # Recent cloud files list
 │   ├── CloudIcon.qml        # Dynamic cloud glyph component
-│   ├── Model.js             # Utility functions & formatting helpers
-│   └── qmldir               # QML component registrations
+│   └── Model.js             # Utility functions & formatting helpers
 ├── assets/
 │   └── icon.svg             # Application vector icon
-└── systemd/
-    └── odrive-automount.service # User systemd service template
+├── systemd/
+│   └── odrive-automount.service # User systemd service template
+└── tests/
+    ├── test_install.sh      # Installer only touches what belongs to ODrive
+    └── test_limits.py       # Hostile cloud content can't exhaust the plugin
 ```
+
+## 🧪 Tests
+
+Both suites run in throwaway directories and never touch your real config, drives or shell:
+
+```bash
+tests/test_install.sh   # install/uninstall in a throwaway HOME, with stubbed omarchy commands
+tests/test_limits.py    # a hostile rclone stand-in floods listings, errors and logs; asserts memory stays bounded
+```
+
+Pass another checkout as the first argument to run the same tests against it, for example a `git worktree` of an older commit.
 
 ---
 

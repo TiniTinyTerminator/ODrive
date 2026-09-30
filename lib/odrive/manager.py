@@ -24,10 +24,20 @@ from .config import (
     save_config,
 )
 from .providers import PROVIDERS, detect_provider
+from .bounded import run_bounded, tail_text
 from .rclone_rc import config_create, die_with_parent, is_secret_key, redact
 
 # rclone reports this total/free size through statfs when a backend can't report its quota
 UNKNOWN_QUOTA_BYTES = 1 << 50
+
+# Caps on data that comes from cloud content, so a huge or hostile folder can't
+# exhaust memory: bytes kept from a listing, entries returned from a listing,
+# and directory entries examined while looking for recent files.
+MAX_LISTING_BYTES = 4 * 1024 * 1024
+MAX_LIST_ENTRIES = 5000
+MAX_RECENT_SCAN_ENTRIES = 5000
+# Mount logs grow for as long as a drive stays mounted; rotate them past this size
+MAX_LOG_BYTES = 5 * 1024 * 1024
 
 
 def _unescape_mount_field(field: str) -> str:
@@ -92,7 +102,8 @@ class DriveManager:
         config_dir = get_config_dir()
         if config_dir.is_dir():
             ensure_private_dir(config_dir)
-        paths = list(self.state_dir.glob("mount_*.log")) + [config_dir / "config.json", self.cache_file]
+        paths = (list(self.state_dir.glob("mount_*.log")) + list(self.state_dir.glob("mount_*.log.1"))
+                 + [config_dir / "config.json", self.cache_file])
         for path in paths:
             try:
                 if path.is_file() and path.stat().st_mode & 0o077:
@@ -311,14 +322,9 @@ class DriveManager:
 
         # 3. Query rclone about for unmounted remotes
         try:
-            res = subprocess.run(
-                [self.rclone_bin, "about", f"{remote_name}:", "--json"],
-                capture_output=True,
-                text=True,
-                timeout=12,
-                check=False,
-            )
-            if res.returncode == 0 and res.stdout.strip():
+            res = run_bounded([self.rclone_bin, "about", f"{remote_name}:", "--json"],
+                              timeout=12, max_stdout=64 * 1024)
+            if res.returncode == 0 and not res.stdout_truncated and res.stdout.strip():
                 about = json.loads(res.stdout)
                 total = int(about.get("total", 0) or 0)
                 used = int(about.get("used", 0) or 0)
@@ -338,7 +344,7 @@ class DriveManager:
                     cache[remote_name] = {"timestamp": now, "data": quota_data}
                     self._save_quota_cache(cache)
                     return quota_data
-        except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+        except (subprocess.SubprocessError, OSError, ValueError):
             pass
 
         # If rclone about failed but we have a previous known quota, retain it
@@ -358,45 +364,49 @@ class DriveManager:
 
         recent = []
         counter = 0
-        mount_depth = mount_path.rstrip(os.sep).count(os.sep)
         max_files_to_check = 250
         checked = 0
+        # Directory entries examined in total: os.walk would load each directory's
+        # full listing into memory, so a folder with millions of entries could
+        # exhaust the process. Every entry listed over FUSE also costs remote calls.
+        budget = MAX_RECENT_SCAN_ENTRIES
+        stack = [(mount_path, 0)]
 
-        try:
-            for root, dirs, files in os.walk(mount_path):
-                # Every directory listed over FUSE costs a remote API call, so stop walking once the budget is spent
-                if checked >= max_files_to_check:
-                    break
-
-                # Depth limiter prevents slow deep directory crawling over FUSE
-                current_depth = root.rstrip(os.sep).count(os.sep) - mount_depth
-                if current_depth >= max_depth:
-                    dirs.clear()
-
-                # Don't follow symlinks
-                dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
-                # Ignore hidden directories like .cache, .tmp, and OneDrive Personal Vault
-                dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() != "personal vault"]
-
-                for name in files:
-                    if checked >= max_files_to_check:
+        while stack and budget > 0 and checked < max_files_to_check:
+            directory, depth = stack.pop()
+            try:
+                it = os.scandir(directory)
+            except OSError:
+                continue
+            with it:
+                for entry in it:
+                    budget -= 1
+                    if budget < 0 or checked >= max_files_to_check:
                         break
-                    checked += 1
-                    if name.startswith("."):
-                        continue
-                    file_path = os.path.join(root, name)
-                    if os.path.islink(file_path):
+                    name = entry.name
+                    # Skip hidden entries (.cache, .tmp) and the OneDrive Personal Vault
+                    if name.startswith(".") or name.lower() == "personal vault":
                         continue
                     try:
-                        st = os.stat(file_path)
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            # Depth limit keeps crawling over FUSE shallow
+                            if depth < max_depth:
+                                stack.append((entry.path, depth + 1))
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        checked += 1
+                        st = entry.stat(follow_symlinks=False)
                     except OSError:
                         continue
 
-                    rel_path = os.path.relpath(file_path, mount_path)
+                    rel_path = os.path.relpath(entry.path, mount_path)
                     folder = os.path.dirname(rel_path)
-                    entry = {
+                    item_entry = {
                         "name": name,
-                        "path": file_path,
+                        "path": entry.path,
                         "relPath": rel_path,
                         "folder": "/" if folder in ("", ".") else folder,
                         "remote": remote_name,
@@ -404,13 +414,11 @@ class DriveManager:
                         "sizeBytes": st.st_size,
                     }
                     counter += 1
-                    item = (entry["modifiedTs"], counter, entry)
+                    item = (item_entry["modifiedTs"], counter, item_entry)
                     if len(recent) < limit:
                         heapq.heappush(recent, item)
                     else:
                         heapq.heappushpop(recent, item)
-        except OSError:
-            return []
 
         return [item[2] for item in sorted(recent, reverse=True)]
 
@@ -458,6 +466,12 @@ class DriveManager:
         cache_age = cfg.get("cache_max_age", "24h")
 
         log_file = self.state_dir / f"mount_{remote_name}.log"
+        # Keep one previous log; the current one would otherwise grow without bound
+        try:
+            if log_file.stat().st_size > MAX_LOG_BYTES:
+                os.replace(log_file, log_file.with_name(log_file.name + ".1"))
+        except OSError:
+            pass
         # rclone would create the log with the umask's permissions; create it private first
         try:
             open_private(log_file, "a").close()
@@ -500,15 +514,15 @@ class DriveManager:
             err_msg = ""
             if log_file.exists():
                 try:
-                    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-                        lines = [l.strip() for l in f if l.strip()]
-                        for line in reversed(lines[-15:]):
-                            if "ERROR" in line or "CRITICAL" in line or "failed" in line:
-                                err_msg = line
-                                break
-                        if not err_msg and lines:
-                            err_msg = lines[-1]
-                        err_msg = neutralize_controls(err_msg)
+                    lines = [l.strip() for l in tail_text(log_file).splitlines() if l.strip()]
+                    for line in reversed(lines[-15:]):
+                        if "ERROR" in line or "CRITICAL" in line or "failed" in line:
+                            err_msg = line
+                            break
+                    if not err_msg and lines:
+                        err_msg = lines[-1]
+                    # A single log line can hold a long, hostile file name
+                    err_msg = neutralize_controls(err_msg[:500])
                 except Exception:
                     pass
 
@@ -634,24 +648,22 @@ class DriveManager:
         self._ensure_onedrive_drive(remote_name)
 
         try:
-            res = subprocess.run(
-                [self.rclone_bin, "lsf", f"{remote_name}:", "--max-depth", "1"],
-                capture_output=True,
-                text=True,
-                timeout=timeout_sec,
-                check=False,
-            )
-            if res.returncode == 0:
+            # Only success matters: once the listing starts flowing the remote works,
+            # so rclone is stopped after a few KB. A large or hostile folder can't grow
+            # this process or make the test slow. Error text is capped too.
+            res = run_bounded([self.rclone_bin, "lsf", f"{remote_name}:", "--max-depth", "1"],
+                              timeout=timeout_sec, max_stdout=4 * 1024, max_stderr=16 * 1024)
+            if res.returncode == 0 or res.stdout_truncated:
                 return True, "Connection verified successfully"
-            err = (res.stderr or res.stdout or "Connection test failed").strip()
+            if res.timed_out:
+                return False, "Connection test timed out. Verify server address and network."
+            err = (res.stderr.decode("utf-8", errors="replace") or "Connection test failed").strip()
             lines = [
                 re.sub(r"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} (ERROR|CRITICAL|NOTICE): ", "", l)
                 for l in err.splitlines()
             ]
-            clean_err = "\n".join(l for l in lines if l.strip())
+            clean_err = neutralize_controls("\n".join(l for l in lines if l.strip()))
             return False, clean_err or "Authentication or connection failed"
-        except subprocess.TimeoutExpired:
-            return False, "Connection test timed out. Verify server address and network."
         except OSError as e:
             return False, str(e)
 
@@ -1095,6 +1107,8 @@ class DriveManager:
                 try:
                     with os.scandir(target_dir) as it:
                         for entry in it:
+                            if len(items) >= MAX_LIST_ENTRIES:
+                                break
                             if entry.name.startswith("."):
                                 continue
                             try:
@@ -1116,17 +1130,30 @@ class DriveManager:
             # Not mounted: query via rclone lsjson
             remote_target = f"{remote_name}:{subpath}" if subpath else f"{remote_name}:"
             try:
-                res = subprocess.run(
-                    [self.rclone_bin, "lsjson", remote_target, "--max-depth", "1"],
-                    capture_output=True,
-                    text=True,
-                    timeout=8,
-                    check=False,
-                )
-                if res.returncode == 0 and res.stdout.strip():
-                    raw_items = json.loads(res.stdout)
+                # Keep at most MAX_LISTING_BYTES of the listing; rclone is stopped once it
+                # passes that, and only the complete entries received are used.
+                res = run_bounded([self.rclone_bin, "lsjson", remote_target, "--max-depth", "1"],
+                                  timeout=8, max_stdout=MAX_LISTING_BYTES)
+                if res.returncode == 0 or res.stdout_truncated:
+                    raw_items = []
+                    # lsjson prints one entry per line: "[", "{...},", ..., "]"
+                    lines = res.stdout.split(b"\n")
+                    if res.stdout_truncated:
+                        lines = lines[:-1]  # the last line was cut off mid-entry
+                    for raw in lines:
+                        raw = raw.strip().rstrip(b",")
+                        if not raw.startswith(b"{"):
+                            continue
+                        try:
+                            parsed = json.loads(raw)
+                        except ValueError:
+                            continue
+                        if isinstance(parsed, dict):
+                            raw_items.append(parsed)
+                        if len(raw_items) >= MAX_LIST_ENTRIES:
+                            break
                     for item in raw_items:
-                        name = item.get("Name", "")
+                        name = str(item.get("Name", ""))
                         if name.startswith("."):
                             continue
                         is_dir = item.get("IsDir", False)
@@ -1138,7 +1165,7 @@ class DriveManager:
                             "path": "",
                             "relPath": f"{subpath}/{name}".strip("/"),
                         })
-            except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+            except (subprocess.SubprocessError, OSError, ValueError):
                 pass
 
         # Sort: directories first, then alphabetical
@@ -1151,9 +1178,9 @@ class DriveManager:
         if not log_file.exists():
             return "No log file found."
         try:
-            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-                return neutralize_controls("".join(lines[-max_lines:]))
+            # Only the end of the log: it can be large and holds cloud file names
+            lines = tail_text(log_file).splitlines(keepends=True)
+            return neutralize_controls("".join(lines[-max_lines:]))
         except OSError as e:
             return f"Error reading log: {e}"
 
