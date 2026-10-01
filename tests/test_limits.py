@@ -10,6 +10,7 @@ its own process so its peak memory can be asserted.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,7 +44,7 @@ except BrokenPipeError:
 '''
 
 PROBE = r'''
-import os, sys, time, json, pathlib
+import os, sys, time, json, pathlib, shutil
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 import odrive.manager as mm
 from odrive.manager import DriveManager
@@ -53,7 +54,8 @@ m.rclone_bin = os.path.join(work, "rclone")
 m._ensure_onedrive_drive = lambda name: None
 big = os.path.join(work, "big")
 mounted = what in ("mounted-list", "recent")
-m.is_remote_mounted = lambda name: (mounted, big if mounted else "/nonexistent")
+if what != "rotate-live":
+    m.is_remote_mounted = lambda name: (mounted, big if mounted else "/nonexistent")
 t = time.time()
 if what == "list":
     r = {"entries": len(m.list_dir("Hostile"))}
@@ -67,12 +69,40 @@ elif what == "recent":
 elif what == "log":
     log = m.get_log("Hostile")
     r = {"lines": len(log.splitlines()), "esc": chr(27) in log}
-elif what == "rotate":
+elif what == "mount-args":
+    # A recording stand-in: the mount command must ask rclone to rotate its log
     mm.get_mount_path_for_remote = lambda n: pathlib.Path(work, "mnt", n)
-    m.rclone_bin = "/bin/true"
+    m.rclone_bin = os.path.join(work, "rclone-rec")
+    m.is_remote_mounted = lambda name: (False, os.path.join(work, "mnt", name))
     m.mount("Hostile")
-    d = pathlib.Path(os.environ["XDG_STATE_HOME"], "odrive")
-    r = {n.name: [n.stat().st_size, oct(n.stat().st_mode & 0o777)] for n in d.glob("mount_Hostile.log*")}
+    r = {"args": open(os.path.join(work, "rclone-rec.args")).read().split("\0")}
+elif what == "rotate-live":
+    # ODrive's real mount() on a throwaway local remote, with the cap lowered to 1 MiB
+    mm.MAX_LOG_MB = 1
+    mnt = pathlib.Path(work, "mnt", "Hostile")
+    mm.get_mount_path_for_remote = lambda n: mnt
+    m.rclone_bin = shutil.which("rclone")
+    ok, msg = m.mount("Hostile")
+    if not ok:
+        r = {"skip": msg[:200]}
+    else:
+        d = pathlib.Path(os.environ["XDG_STATE_HOME"], "odrive")
+        try:
+            writes, deadline = 0, time.time() + 60
+            # Bounded in time, so the probe always gets to unmount below
+            while time.time() < deadline and len(list(d.glob("mount_Hostile-*.log"))) < 1:
+                for _ in range(500):
+                    (mnt / f"f{writes}.txt").write_text("x")
+                    writes += 1
+                time.sleep(0.5)
+            for _ in range(500):  # keep logging past the first rotation
+                (mnt / f"g{writes}.txt").write_text("x")
+                writes += 1
+            time.sleep(2)
+            r = {"writes": writes, "logs": {n.name: [n.stat().st_size, oct(n.stat().st_mode & 0o777)]
+                                            for n in sorted(d.glob("mount_Hostile*"))}}
+        finally:
+            m.unmount("Hostile")
 r["seconds"] = round(time.time() - t, 2)
 # VmHWM (peak resident set) restarts with each exec, unlike ru_maxrss, which
 # carries the parent's peak over and would report the test harness instead
@@ -98,8 +128,11 @@ def check(name, cond, detail):
 def probe(work, what, **env):
     e = dict(os.environ, XDG_STATE_HOME=os.path.join(work, "state"),
              XDG_CONFIG_HOME=os.path.join(work, "cfg"), **env)
-    out = subprocess.run([sys.executable, os.path.join(work, "probe.py"), REPO, work, what],
-                         capture_output=True, text=True, env=e, timeout=120)
+    try:
+        out = subprocess.run([sys.executable, os.path.join(work, "probe.py"), REPO, work, what],
+                             capture_output=True, text=True, env=e, timeout=150)
+    except subprocess.TimeoutExpired:
+        return {"error": "probe timed out"}
     if out.returncode != 0:
         return {"error": out.stderr.strip().splitlines()[-1:] or ["?"]}
     import json
@@ -114,6 +147,10 @@ def main():
         os.chmod(os.path.join(work, "rclone"), 0o755)
         with open(os.path.join(work, "probe.py"), "w") as f:
             f.write(PROBE)
+        rec = os.path.join(work, "rclone-rec")
+        with open(rec, "w") as f:
+            f.write("#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$0.args\"\n")
+        os.chmod(rec, 0o755)
         os.makedirs(os.path.join(work, "big"))
         for i in range(20000):
             open(os.path.join(work, "big", f"f{i:05d}"), "w").close()
@@ -147,11 +184,41 @@ def main():
         check("recent-file scan bounded", "files" in r and r.get("seconds", 99) < 5 and r.get("peak_mb", 1e9) < MAX_PEAK_MB, r)
         r = probe(work, "log")
         check("50 MB log: tail only, escapes neutralised", r.get("lines", 1e9) <= 50 and r.get("esc") is False and r.get("peak_mb", 1e9) < MAX_PEAK_MB, r)
-        r = probe(work, "rotate")
-        rotated = r.get("mount_Hostile.log.1")
-        check("oversized log rotated at mount, both private",
-              bool(rotated) and rotated[0] > 40 * 1024 * 1024 and rotated[1] == "0o600"
-              and r.get("mount_Hostile.log", [None, ""])[1] == "0o600", r)
+
+        print("4. mount logs rotate while the drive stays mounted")
+        r = probe(work, "mount-args")
+        args = r.get("args", [])
+        check("mount asks rclone to rotate its log",
+              any(a.startswith("--log-file-max-size=") and a.endswith("M") for a in args)
+              and "--log-file-max-backups=1" in args, [a for a in args if a.startswith("--log")])
+        live = shutil.which("rclone") and (shutil.which("fusermount3") or shutil.which("fusermount"))
+        if not live:
+            print("  skip live rotation (needs rclone and FUSE)")
+        else:
+            src = os.path.join(work, "src")
+            os.makedirs(src)
+            conf = os.path.join(work, "rclone.conf")
+            with open(conf, "w") as f:
+                f.write(f"[Hostile]\ntype = alias\nremote = {src}\n")
+            # Fresh state, and rclone's VFS cache kept inside the temp dir
+            shutil.rmtree(os.path.join(work, "state"), ignore_errors=True)
+            mnt = os.path.join(work, "mnt", "Hostile")
+            try:
+                r = probe(work, "rotate-live", RCLONE_CONFIG=conf, XDG_CACHE_HOME=os.path.join(work, "cache"))
+            finally:
+                # Never leave a test mount behind, even if the probe was killed
+                if os.path.ismount(mnt):
+                    fusermount = shutil.which("fusermount3") or shutil.which("fusermount")
+                    subprocess.run([fusermount, "-u", "-z", mnt], capture_output=True)
+            if "skip" in r:
+                print(f"  skip live rotation (mount failed: {r['skip']})")
+            else:
+                logs = r.get("logs", {})
+                active = logs.get("mount_Hostile.log", [1 << 40, ""])
+                backups = {k: v for k, v in logs.items() if k.startswith("mount_Hostile-")}
+                check("live: active log stays under the cap, one backup, all private",
+                      active[0] <= 1024 * 1024 and len(backups) == 1
+                      and all(v[1] == "0o600" for v in logs.values()), r)
 
     print(f"\npassed {passed}, failed {failed}")
     return 1 if failed else 0

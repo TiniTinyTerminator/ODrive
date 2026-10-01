@@ -36,8 +36,10 @@ UNKNOWN_QUOTA_BYTES = 1 << 50
 MAX_LISTING_BYTES = 4 * 1024 * 1024
 MAX_LIST_ENTRIES = 5000
 MAX_RECENT_SCAN_ENTRIES = 5000
-# Mount logs grow for as long as a drive stays mounted; rotate them past this size
-MAX_LOG_BYTES = 5 * 1024 * 1024
+# Mount logs grow for as long as a drive stays mounted, so the rclone daemon rotates
+# them itself past this size, keeping one backup: at most ~2x this much disk per
+# drive. rclone counts this in whole MiB; smaller values fall back to its 100 MiB default.
+MAX_LOG_MB = 5
 
 
 def _unescape_mount_field(field: str) -> str:
@@ -466,12 +468,6 @@ class DriveManager:
         cache_age = cfg.get("cache_max_age", "24h")
 
         log_file = self.state_dir / f"mount_{remote_name}.log"
-        # Keep one previous log; the current one would otherwise grow without bound
-        try:
-            if log_file.stat().st_size > MAX_LOG_BYTES:
-                os.replace(log_file, log_file.with_name(log_file.name + ".1"))
-        except OSError:
-            pass
         # rclone would create the log with the umask's permissions; create it private first
         try:
             open_private(log_file, "a").close()
@@ -489,6 +485,10 @@ class DriveManager:
             "--daemon",
             "--daemon-timeout=20s",
             f"--log-file={log_file}",
+            # Rotate live inside the daemon, so the log can't fill the disk while mounted.
+            # Backups (mount_<name>-<timestamp>.log) keep the active log's 0600 mode.
+            f"--log-file-max-size={MAX_LOG_MB}M",
+            "--log-file-max-backups=1",
             "--log-level=INFO",
         ]
 
